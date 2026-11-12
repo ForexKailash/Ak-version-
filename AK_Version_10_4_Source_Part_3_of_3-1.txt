@@ -1,0 +1,3699 @@
+   double a = 0, pp = 0, mm = 0, adx = 0;
+   bool first = true, firstDx = true;
+   for(int s = st; s >= sh; s--)
+     {
+      double h = Hi(tf, s), l = Lo(tf, s), pc = Cl(tf, s + 1), ph = Hi(tf, s + 1), pl = Lo(tf, s + 1);
+      double tr = MathMax(h - l, MathMax(MathAbs(h - pc), MathAbs(l - pc)));
+      double up = h - ph, dn = pl - l;
+      double pdm = (up > dn && up > 0) ? up : 0, mdm = (dn > up && dn > 0) ? dn : 0;
+      if(first) { a = tr; pp = pdm; mm = mdm; first = false; }
+      else { a += (tr - a) / 14.0; pp += (pdm - pp) / 14.0; mm += (mdm - mm) / 14.0; }
+      if(a <= 0) continue;
+      double pdi = 100 * pp / a, mdi = 100 * mm / a;
+      double dx = (pdi + mdi > 0) ? 100 * MathAbs(pdi - mdi) / (pdi + mdi) : 0;
+      if(firstDx) { adx = dx; firstDx = false; }
+      else adx += (dx - adx) / 14.0;
+     }
+   return adx;
+  }
+
+bool RangeMarket()
+  {
+   double lim = (g_cls == SC_GOLD) ? RangeMaxADX_Gold : RangeMaxADX_ETH;
+   return (TxAdxW(PERIOD_H4, 1) < lim);
+  }
+
+//--- failed breakout fade: the candle poked beyond the last 20-candle low / high and closed back inside
+int TxFailFade(int tf)
+  {
+   int kh = iHighest(_Symbol, tf, MODE_HIGH, 20, 2), kl = iLowest(_Symbol, tf, MODE_LOW, 20, 2);
+   if(kh < 0 || kl < 0) return 0;
+   double hh = Hi(tf, kh), ll = Lo(tf, kl), o = Op(tf, 1), h = Hi(tf, 1), l = Lo(tf, 1), c = Cl(tf, 1);
+   if(l < ll && c > ll && c > o) return 1;
+   if(h > hh && c < hh && c < o) return -1;
+   return 0;
+  }
+
+//--- Bollinger band re-entry: the candle before closed outside the band (20, 2) and this candle closed back inside
+int TxBandBack(int tf)
+  {
+   double m1 = 0, m2 = 0;
+   double s1 = TxSd(tf, 1, m1), s2 = TxSd(tf, 2, m2);
+   double c1 = Cl(tf, 1), c2 = Cl(tf, 2);
+   if(c2 < m2 - 2 * s2 && c1 > m1 - 2 * s1) return 1;
+   if(c2 > m2 + 2 * s2 && c1 < m1 + 2 * s1) return -1;
+   return 0;
+  }
+
+int TxPinBar(int tf)
+  {
+   double o = Op(tf, 1), h = Hi(tf, 1), l = Lo(tf, 1), c = Cl(tf, 1);
+   double rng = h - l, body = MathAbs(c - o);
+   if(rng <= 0) return 0;
+   double lw = MathMin(o, c) - l, uw = h - MathMax(o, c), e20 = EMAv(tf, 20, 1);
+   if(UpTr(tf, 1) && lw >= 2 * body && lw >= 0.6 * rng && l <= e20) return 1;
+   if(DnTr(tf, 1) && uw >= 2 * body && uw >= 0.6 * rng && h >= e20) return -1;
+   return 0;
+  }
+
+double TxMid(int tf, int n, int sh)
+  {
+   int kh = iHighest(_Symbol, tf, MODE_HIGH, n, sh), kl = iLowest(_Symbol, tf, MODE_LOW, n, sh);
+   if(kh < 0 || kl < 0) return 0;
+   return (Hi(tf, kh) + Lo(tf, kl)) / 2.0;
+  }
+
+//--- Ichimoku: Tenkan (9) crosses Kijun (26) with the close beyond the cloud (spans built 26 candles earlier)
+int TxIchimoku(int tf)
+  {
+   if(iBars(_Symbol, tf) < 140) return 0;
+   double t1 = TxMid(tf, 9, 1), k1 = TxMid(tf, 26, 1), t2 = TxMid(tf, 9, 2), k2 = TxMid(tf, 26, 2);
+   double sa = (TxMid(tf, 9, 27) + TxMid(tf, 26, 27)) / 2.0, sb = TxMid(tf, 52, 27);
+   double c = Cl(tf, 1);
+   if(t1 > k1 && t2 <= k2 && c > MathMax(sa, sb)) return 1;
+   if(t1 < k1 && t2 >= k2 && c < MathMin(sa, sb)) return -1;
+   return 0;
+  }
+
+//--- inside day (yesterday inside the day before) and the candle closes beyond yesterday's high / low
+int TxInsideDay(int tf)
+  {
+   if(iBars(_Symbol, PERIOD_D1) < 5) return 0;
+   if(!(Hi(PERIOD_D1, 1) < Hi(PERIOD_D1, 2) && Lo(PERIOD_D1, 1) > Lo(PERIOD_D1, 2))) return 0;
+   double ph = Hi(PERIOD_D1, 1), pl = Lo(PERIOD_D1, 1), c1 = Cl(tf, 1), c2 = Cl(tf, 2);
+   if(c1 > ph && c2 <= ph) return 1;
+   if(c1 < pl && c2 >= pl) return -1;
+   return 0;
+  }
+
+//--- the exit that tested best for an entry on this symbol (-1 = the normal ExitStyle)
+int TxExit(int code, double &tgt)
+  {
+   tgt = 0;
+   if(code >= 18 && code <= 20) return 1;                               // range entries: step lock (as tested)
+   if(g_cls == SC_OIL)
+     {
+      if(code == 3 || code == 14) return 1;
+      if(code == 15) { tgt = 3.0; return 2; }
+     }
+   if(g_cls == SC_FX && IsEURUSD())
+     {
+      if(code == 16) { tgt = 3.0; return 2; }
+      if(code == 17) { tgt = 2.0; return 2; }
+     }
+   return -1;
+  }
+
+//--- lot: H4 entries use their own (smaller) lot, H1 entries the symbol lot
+double TxLots(int tf, double S)
+  {
+   if(tf != PERIOD_H4 || RiskLotsHere()) return TradeLots(S);
+   if(g_cls == SC_GOLD) return NormLot(TrendLotH4Gold);
+   if(g_cls == SC_BTC) return NormLot(TrendLotH4BTC);
+   if(g_cls == SC_ETH) return NormLot(TrendLotH4ETH);
+   if(g_cls == SC_OIL) return NormLot(TrendLotH4Oil);
+   return NormLot(TrendLotH4EUR);
+  }
+
+bool TryTrendEntry(int code, int d, bool needTrend)
+  {
+   int m = M_TR;
+   int tf = TxTf(code);
+   int ly = (tf == PERIOD_H4) ? LY_T4 : LY_T1;
+   int fm = 100 + code;
+   string head = SideName(d) + " " + TxName(code) + " at " + IstClock(TimeCurrent()) + " IST";
+   int hkey = HistKeyNow(HistSetup(ly, fm), d);
+   if(needTrend && TrendSide() != d) { Note(m, head + " - no trade: the D1 / H4 trend does not agree", -1); return false; }
+   if(g_scanDir[TfSlot(tf)] == d) { NoteMark(m, d, tf, fm, head + " - skipped: this " + TfName(tf) + " candle was already traded " + SideName(d) + " by another method", hkey); return false; }
+   if(StackOnlyAfterBE && MethodTfAtRisk(m, tf)) { NoteMark(m, d, tf, fm, head + " - skipped: the open " + TfName(tf) + " Trend trade is not risk-free yet", hkey); return false; }
+   string hv = "";
+   if(HistoryMode == HIST_FOLLOW && HistSaysSkip(hkey, hv)) { NoteMark(m, d, tf, fm, head + " - skipped by history: " + hv, hkey); return false; }
+   double atr = 0;
+   double S = StopDistance(tf, d, atr);
+   if(S <= 0) return false;
+   RefreshRates();
+   double spread = Ask - Bid;
+   double entry = (d > 0) ? Ask : Bid;
+   double sl = NormalizeDouble(entry - d * S, Digits);
+   double lots = TxLots(tf, S);
+   string gnote = "";
+   lots = GuardLots(lots, d, gnote);
+   if(lots <= 0) { NoteMark(m, d, tf, fm, head + " - skipped: " + gnote, hkey); return false; }
+   string why = "";
+   bool quiet = false;
+   string fw = "";
+   if(StudyFilter(d, S, fw)) { NoteMark(m, d, tf, fm, head + " - skipped: " + fw, hkey); return false; }
+   if(UseSpreadFilter && MaxSpreadPctSL > 0 && spread > MaxSpreadPctSL / 100.0 * S) why = "spread is " + DoubleToString(100.0 * spread / S, 0) + "% of the stop (limit " + DoubleToString(MaxSpreadPctSL, 0) + "%)";
+   else if(EntryGates(S, lots, why, quiet, m))
+     {
+      string tb = "";
+      if(TimeBlock(tb)) why = tb;
+     }
+   if(why != "")
+     {
+      NoteMark(m, d, tf, fm, head + (quiet ? " - not taken: " : " - skipped: ") + why, hkey);
+      if(!quiet) LogSkip(ly, fm, d, entry, sl, why);
+      return false;
+     }
+   double xt = 0;
+   g_nextXS = TxExit(code, xt);
+   g_nextXT = xt;
+   bool ok = PlaceTrade(ly, fm, d, sl, S, atr, lots, EX_TX, hkey);
+   g_nextXS = -1;
+   g_nextXT = 0;
+   return ok;
+  }
+
+//--- new H1 / H4 candle: H4 entries first (they tested best), then H1; one new Trend trade per tick
+void ScanTrend(bool newH1, bool newH4)
+  {
+   if(!UseTrendMethod || (!newH1 && !newH4)) return;
+   bool nt = true;
+   for(int pass = 0; pass < 2; pass++)
+     {
+      int tfp = (pass == 0) ? PERIOD_H4 : PERIOD_H1;
+      if((tfp == PERIOD_H4 && !newH4) || (tfp == PERIOD_H1 && !newH1)) continue;
+      for(int c = 1; c <= TX_N; c++)
+        {
+         if(TxTf(c) != tfp || !TxActive(c, nt)) continue;
+         int d = TxSignal(c);
+         if(d == 0) continue;
+         if(TryTrendEntry(c, d, nt)) return;
+        }
+     }
+  }
+
+//--- professional wording
+string ProTxTitle(int code, int d)
+  {
+   bool b = (d > 0);
+   switch(code)
+     {
+      case 1: return "Trend continuation (Heikin-Ashi)";
+      case 2: return "Deep pullback";
+      case 3: return "Trend pullback";
+      case 4: return "Momentum shift (MACD)";
+      case 5: return "Momentum continuation";
+      case 6: case 8: return b ? "Supertrend turns bullish" : "Supertrend turns bearish";
+      case 7: return b ? "Volatility breakout" : "Volatility breakdown";
+      case 9: return b ? "Bullish moving-average cross" : "Bearish moving-average cross";
+      case 10: return "Momentum shift (MACD)";
+      case 11: return b ? "55-candle breakout" : "55-candle breakdown";
+      case 12: return b ? "MACD turns positive" : "MACD turns negative";
+      case 13: return b ? "RSI back above 50" : "RSI back below 50";
+      case 14: return b ? "Bullish pin bar in the trend" : "Bearish pin bar in the trend";
+      case 15: return "Strong-trend pullback";
+      case 16: return b ? "Ichimoku bullish cross" : "Ichimoku bearish cross";
+      case 17: return b ? "Inside-day breakout" : "Inside-day breakdown";
+      case 18: return b ? "Range market - failed breakdown" : "Range market - failed breakout";
+      case 19: case 20: return b ? "Range market - rebound from the lower band" : "Range market - rejection from the upper band";
+     }
+   return "Trend setup";
+  }
+
+string ProTxIdea(int code, int d)
+  {
+   bool b = (d > 0);
+   string tf = ProTf(TxTf(code));
+   string s = _Symbol + " - ";
+   switch(code)
+     {
+      case 1: s += "on the " + tf + " chart the Heikin-Ashi candles just turned " + (b ? "green" : "red") + " again inside the " + (b ? "uptrend" : "downtrend") + " - the pullback is over and the trend is resuming."; break;
+      case 2: s += "price pulled back deep, to the 50-period average on the " + tf + " chart, and " + (b ? "buyers" : "sellers") + " defended it with a strong close."; break;
+      case 3: s += "price pulled back to the 20-period average on the " + tf + " chart and closed strongly " + (b ? "above the previous high" : "below the previous low") + "."; break;
+      case 4: case 10: s += "the MACD crossed its signal line " + (b ? "upward" : "downward") + " on the " + tf + " chart while the moving averages point " + (b ? "up" : "down") + " - momentum is back with the trend."; break;
+      case 5: s += "a strong " + tf + " candle with a large body closed " + (b ? "above" : "below") + " the last 10 candles - clear momentum."; break;
+      case 6: case 8: s += "the Supertrend on the " + tf + " chart has flipped " + (b ? "up" : "down") + " - the short-term trend has turned in our direction."; break;
+      case 7: s += "after a quiet, tight range on the " + tf + " chart price closed " + (b ? "above the upper" : "below the lower") + " Bollinger band - volatility is expanding in our direction."; break;
+      case 9: s += "the 20-period average crossed " + (b ? "above" : "below") + " the 50-period average on the " + tf + " chart - a new " + (b ? "uptrend" : "downtrend") + " is forming."; break;
+      case 11: s += "price closed " + (b ? "above the highest high" : "below the lowest low") + " of the last 55 candles on the " + tf + " chart - a classic trend breakout."; break;
+      case 12: s += "the MACD has crossed " + (b ? "above" : "below") + " zero on the " + tf + " chart - the bigger momentum has turned " + (b ? "bullish." : "bearish."); break;
+      case 13: s += "the RSI on the " + tf + " chart has moved back " + (b ? "above" : "below") + " 50 - " + (b ? "buyers" : "sellers") + " are taking control again."; break;
+      case 14: s += "a " + (b ? "bullish" : "bearish") + " pin bar rejected the 20-period average on the " + tf + " chart - " + (b ? "buyers" : "sellers") + " defended the trend."; break;
+      case 15: s += "the trend is strong (ADX above 25) and price pulled back to the 20-period average on the " + tf + " chart before closing strongly in the trend direction."; break;
+      case 16: s += "on the " + tf + " chart the Ichimoku Tenkan line crossed the Kijun line " + (b ? "upward" : "downward") + " with price " + (b ? "above" : "below") + " the cloud - a clean trend signal."; break;
+      case 17: s += "yesterday was an inside day (a quiet, tight range) and price has now closed " + (b ? "above yesterday's high" : "below yesterday's low") + " - the range is breaking in our direction."; break;
+      case 18: s += "the market is moving sideways (weak H4 trend) and price briefly broke " + (b ? "below the 20-candle low" : "above the 20-candle high") + " on the " + tf + " chart, then closed back inside - the breakout failed and price is likely to return into the range."; break;
+      case 19: case 20: s += "the market is moving sideways (weak H4 trend); price closed outside the " + (b ? "lower" : "upper") + " Bollinger band on the " + tf + " chart and has now closed back inside - a range rebound toward the middle."; break;
+      default: s += "a trend signal printed on the " + tf + " chart."; break;
+     }
+   return s;
+  }
+
+
+//==================================================================
+// MEMORY ENGINE - your method: the EA remembers which strategy + exit worked in which situation (5-year analysis),
+// checks every new M15 / H1 candle, and when a learnt setup fires in the same situation it trades it (or shadows it).
+//==================================================================
+
+double   g_wo[MNB];
+double   g_wh[MNB];
+double   g_wl[MNB];
+double   g_wc[MNB];
+datetime g_wt[MNB];
+double   g_we20[MNB];
+double   g_we50[MNB];
+double   g_we200[MNB];
+double   g_watr[MNB];
+double   g_wrsi2[MNB];
+double   g_wstk[MNB];
+double   g_wstd[MNB];
+double   g_wcci[MNB];
+double   g_wadx[MNB];
+double   g_wfh[MNB];                     // latest confirmed fractal high visible at each candle (0 = none yet)
+double   g_wfl[MNB];                     // latest confirmed fractal low
+int      g_wn = 0;                       // candles loaded
+
+bool     g_shOn[MSHN];
+int      g_shCell[MSHN];
+int      g_shDir[MSHN];
+int      g_shEx[MSHN];
+int      g_shMaxM[MSHN];
+double   g_shEn[MSHN];
+double   g_shSL[MSHN];
+double   g_shTP[MSHN];
+double   g_shR[MSHN];
+double   g_shAtr[MSHN];
+double   g_shPk[MSHN];
+datetime g_shT[MSHN];
+
+string   g_memLast = "";                 // last memory signal (panel)
+datetime g_memLastT = 0;
+string   g_memAct = "";                  // last memory trade / shadow trade the EA took (panel)
+string   g_memSit = "";                  // situation of the last checked candle (panel)
+string   g_m5Txt = "";                   // M1 / M5 analysis (panel)
+bool     g_memTick = false;              // a real memory trade was opened on this tick
+datetime g_m5Bar = 0;
+
+//------------------------------------------------------------------
+// names and small helpers
+//------------------------------------------------------------------
+string MemExitName(int mex)
+  {
+   if(mex == MEX_TP1) return "TARGET 1 ATR";
+   if(mex == MEX_TP2) return "TARGET 2 ATR";
+   if(mex == MEX_TP3) return "TARGET 3 ATR";
+   return "TREND RIDE";
+  }
+
+int MemMaxBars(int mex)
+  {
+   if(mex == MEX_TP1) return 12;
+   if(mex == MEX_TP2) return 24;
+   if(mex == MEX_TP3) return 48;
+   return 120;
+  }
+
+string MemDate(int d)
+  {
+   if(d <= 0) return "-";
+   return StringFormat("%04d-%02d-%02d", d / 10000, (d / 100) % 100, d % 100);
+  }
+
+string MemResWord(int r)
+  {
+   if(r > 0) return "won";
+   if(r < 0) return "lost";
+   return "flat";
+  }
+
+string MemTrendWord(int t) { return (t > 0) ? "UP" : ((t < 0) ? "DOWN" : "FLAT"); }
+
+string MemSessionName(int s)
+  {
+   if(s == 0) return "Asia";
+   if(s == 1) return "London";
+   if(s == 2) return "New York";
+   if(s == 3) return "late session";
+   return "weekend";
+  }
+
+string MemPatWord(int p) { return (p > 0) ? "W (double bottom)" : ((p < 0) ? "M (double top)" : "none"); }
+
+double MemRoundStep()
+  {
+   if(g_cls == SC_GOLD) return 10.0;
+   if(g_cls == SC_BTC) return 1000.0;
+   if(g_cls == SC_ETH) return 100.0;
+   if(g_cls == SC_OIL) return 1.0;
+   return 0.005;
+  }
+
+//--- symbol class of the M5 situation table: 0 gold, 1 BTC, 2 ETH, 3 EURUSD, 4 oil, -1 not analysed
+int MemSymClass()
+  {
+   if(g_cls == SC_GOLD) return 0;
+   if(g_cls == SC_BTC) return 1;
+   if(g_cls == SC_ETH) return 2;
+   if(g_cls == SC_OIL) return 4;
+   string u = _Symbol;
+   StringToUpper(u);
+   if(StringFind(u, "EURUSD") >= 0) return 3;
+   return -1;
+  }
+
+//--- learnt cells of this symbol class (memory run on all data, 5 symbols)
+int MemCellsHere()
+  {
+   int c = MemSymClass(), n = 0;
+   if(c < 0) return 0;
+   for(int i = 0; i < MEM_N; i++) if(g_mCls[i] == c) n++;
+   return n;
+  }
+bool MemSymbolOn()
+  {
+   int c = MemSymClass();
+   if(c == 0) return MemoryOnGold;
+   if(c == 1) return MemoryOnBTC;
+   if(c == 2) return MemoryOnETH;
+   if(c == 3) return MemoryOnEUR;
+   if(c == 4) return MemoryOnOil;
+   return false;
+  }
+bool MemTradesHere() { return (MemSymbolOn() && MemCellsHere() > 0); }
+
+//------------------------------------------------------------------
+// indicators on the loaded candles (oldest first, last index = last completed candle) - same formulas as the analysis
+//------------------------------------------------------------------
+void MemEmaAll()
+  {
+   double a20 = 2.0 / 21.0, a50 = 2.0 / 51.0, a200 = 2.0 / 201.0;
+   g_we20[0] = g_wc[0];
+   g_we50[0] = g_wc[0];
+   g_we200[0] = g_wc[0];
+   for(int i = 1; i < g_wn; i++)
+     {
+      g_we20[i] = a20 * g_wc[i] + (1.0 - a20) * g_we20[i - 1];
+      g_we50[i] = a50 * g_wc[i] + (1.0 - a50) * g_we50[i - 1];
+      g_we200[i] = a200 * g_wc[i] + (1.0 - a200) * g_we200[i - 1];
+     }
+  }
+
+bool MemLoad(int tf)
+  {
+   int bars = iBars(_Symbol, tf) - 2;
+   if(bars < 300) return false;
+   int n = (bars > MNB) ? MNB : bars;
+   for(int i = 0; i < n; i++)
+     {
+      int sh = n - i;
+      g_wo[i] = iOpen(_Symbol, tf, sh);
+      g_wh[i] = iHigh(_Symbol, tf, sh);
+      g_wl[i] = iLow(_Symbol, tf, sh);
+      g_wc[i] = iClose(_Symbol, tf, sh);
+      g_wt[i] = iTime(_Symbol, tf, sh);
+      if(g_wc[i] <= 0 || g_wh[i] <= 0 || g_wl[i] <= 0) return false;
+     }
+   g_wn = n;
+   MemEmaAll();
+   //--- ATR(14): simple average of the true range
+   double tr[];
+   ArrayResize(tr, n);
+   double s = 0;
+   for(int i = 0; i < n; i++)
+     {
+      tr[i] = (i == 0) ? g_wh[0] - g_wl[0] : MathMax(g_wh[i], g_wc[i - 1]) - MathMin(g_wl[i], g_wc[i - 1]);
+      s += tr[i];
+      if(i >= 14) s -= tr[i - 14];
+      g_watr[i] = (i >= 13) ? s / 14.0 : 0.0;
+     }
+   //--- RSI(2), Wilder smoothing
+   double up = 0, dn = 0, ar = 0.5;
+   for(int i = 0; i < n; i++)
+     {
+      double d = (i == 0) ? 0.0 : g_wc[i] - g_wc[i - 1];
+      double u = (d > 0) ? d : 0.0, w = (d < 0) ? -d : 0.0;
+      if(i == 0) { up = u; dn = w; }
+      else { up = ar * u + (1.0 - ar) * up; dn = ar * w + (1.0 - ar) * dn; }
+      g_wrsi2[i] = 100.0 - 100.0 / (1.0 + up / MathMax(dn, 1e-12));
+     }
+   //--- Stochastic(14, 3, 3): %K from 3-candle sums, %D = 3-candle average of %K
+   double hh[], ll[];
+   ArrayResize(hh, n);
+   ArrayResize(ll, n);
+   for(int i = 0; i < n; i++)
+     {
+      hh[i] = 0;
+      ll[i] = 0;
+      g_wstk[i] = 50;
+      g_wstd[i] = 50;
+      if(i < 13) continue;
+      double mx = g_wh[i], mn = g_wl[i];
+      for(int k = i - 13; k < i; k++) { if(g_wh[k] > mx) mx = g_wh[k]; if(g_wl[k] < mn) mn = g_wl[k]; }
+      hh[i] = mx;
+      ll[i] = mn;
+     }
+   for(int i = 15; i < n; i++)
+     {
+      double num = 0, den = 0;
+      for(int k = i - 2; k <= i; k++) { num += g_wc[k] - ll[k]; den += hh[k] - ll[k]; }
+      g_wstk[i] = 100.0 * num / MathMax(den, 1e-12);
+      if(i >= 17) g_wstd[i] = (g_wstk[i] + g_wstk[i - 1] + g_wstk[i - 2]) / 3.0;
+     }
+   //--- CCI(20) of the typical price, mean deviation
+   for(int i = 0; i < n; i++)
+     {
+      g_wcci[i] = 0;
+      if(i < 19) continue;
+      double m = 0;
+      for(int k = i - 19; k <= i; k++) m += (g_wh[k] + g_wl[k] + g_wc[k]) / 3.0;
+      m /= 20.0;
+      double md = 0;
+      for(int k = i - 19; k <= i; k++) md += MathAbs((g_wh[k] + g_wl[k] + g_wc[k]) / 3.0 - m);
+      md /= 20.0;
+      g_wcci[i] = ((g_wh[i] + g_wl[i] + g_wc[i]) / 3.0 - m) / MathMax(0.015 * md, 1e-12);
+     }
+   //--- ADX(14), MT4 style
+   double aa = 2.0 / 15.0, pdi = 0, mdi = 0, adx = 0;
+   g_wadx[0] = 0;
+   for(int i = 1; i < n; i++)
+     {
+      double pu = g_wh[i] - g_wh[i - 1], pd = g_wl[i - 1] - g_wl[i];
+      if(pu < 0) pu = 0;
+      if(pd < 0) pd = 0;
+      if(pu > pd) pd = 0;
+      else if(pu < pd) pu = 0;
+      else { pu = 0; pd = 0; }
+      double t = MathMax(g_wh[i] - g_wl[i], MathMax(MathAbs(g_wh[i] - g_wc[i - 1]), MathAbs(g_wl[i] - g_wc[i - 1])));
+      double pp = (t > 0) ? 100.0 * pu / t : 0.0, qq = (t > 0) ? 100.0 * pd / t : 0.0;
+      pdi = pp * aa + pdi * (1.0 - aa);
+      mdi = qq * aa + mdi * (1.0 - aa);
+      double sm = pdi + mdi;
+      double dx = (sm > 0) ? 100.0 * MathAbs(pdi - mdi) / sm : 0.0;
+      adx = dx * aa + adx * (1.0 - aa);
+      g_wadx[i] = adx;
+     }
+   //--- latest confirmed 5-candle fractals (a fractal is known 2 candles after it formed)
+   double lh = 0, lw = 0;
+   for(int i = 0; i < n; i++)
+     {
+      g_wfh[i] = 0;
+      g_wfl[i] = 0;
+      if(i < 4) continue;
+      int k = i - 2;
+      if(g_wh[k] > g_wh[k - 1] && g_wh[k] > g_wh[k - 2] && g_wh[k] >= g_wh[k + 1] && g_wh[k] >= g_wh[k + 2]) lh = g_wh[k];
+      if(g_wl[k] < g_wl[k - 1] && g_wl[k] < g_wl[k - 2] && g_wl[k] <= g_wl[k + 1] && g_wl[k] <= g_wl[k + 2]) lw = g_wl[k];
+      g_wfh[i] = lh;
+      g_wfl[i] = lw;
+     }
+   return true;
+  }
+
+//--- previous server day's high / low / close for the candle at index j
+bool MemPrevDay(int j, double &ph, double &pl, double &pc)
+  {
+   int sh = iBarShift(_Symbol, PERIOD_D1, g_wt[j], false);
+   if(sh < 0) return false;
+   ph = iHigh(_Symbol, PERIOD_D1, sh + 1);
+   pl = iLow(_Symbol, PERIOD_D1, sh + 1);
+   pc = iClose(_Symbol, PERIOD_D1, sh + 1);
+   return (ph > 0 && pl > 0 && pc > 0);
+  }
+
+//------------------------------------------------------------------
+// THE 16 STRATEGIES of the learnt memory (decided at the close of candle j): +1 buy, -1 sell, 0 none
+//------------------------------------------------------------------
+int MemSignal(int sid, int j)
+  {
+   if(j < 20) return 0;
+   double o = g_wo[j], h = g_wh[j], l = g_wl[j], c = g_wc[j];
+   double po = g_wo[j - 1], pc = g_wc[j - 1];
+   double atr = g_watr[j];
+   if(atr <= 0) return 0;
+   double rng = h - l, body = MathAbs(c - o);
+   bool upT = (g_we20[j] > g_we50[j] && c > g_we200[j]);
+   bool dnT = (g_we20[j] < g_we50[j] && c < g_we200[j]);
+   bool L = false, S = false;
+   switch(sid)
+     {
+      case 0:   // 3 bars in a row fade
+         L = (c < pc && pc < g_wc[j - 2] && g_wc[j - 2] < g_wc[j - 3]);
+         S = (c > pc && pc > g_wc[j - 2] && g_wc[j - 2] > g_wc[j - 3]);
+         break;
+      case 1:   // break of structure retest
+        {
+         bool brU = false, brD = false;
+         double lvU = 0, lvD = 0;
+         for(int i = j; i >= j - 9; i--)
+           {
+            if(g_wfh[i] > 0 && g_wc[i] > g_wfh[i]) brU = true;
+            if(g_wfl[i] > 0 && g_wc[i] < g_wfl[i]) brD = true;
+           }
+         for(int i = j; i >= j - 10; i--)
+           {
+            if(lvU == 0 && g_wfh[i] > 0 && g_wc[i] > g_wfh[i] && g_wc[i - 1] <= g_wfh[i]) lvU = g_wfh[i];
+            if(lvD == 0 && g_wfl[i] > 0 && g_wc[i] < g_wfl[i] && g_wc[i - 1] >= g_wfl[i]) lvD = g_wfl[i];
+           }
+         L = (brU && lvU > 0 && l <= lvU + 0.2 * atr && c > lvU && c > o);
+         S = (brD && lvD > 0 && h >= lvD - 0.2 * atr && c < lvD && c < o);
+         break;
+        }
+      case 2:   // CCI 200 fade
+         L = (g_wcci[j] < -200);
+         S = (g_wcci[j] > 200);
+         break;
+      case 3:   // EMA20 bounce with ADX > 25
+         L = (upT && g_wadx[j] > 25 && l <= g_we20[j] && c > g_we20[j] && c > o);
+         S = (dnT && g_wadx[j] > 25 && h >= g_we20[j] && c < g_we20[j] && c < o);
+         break;
+      case 4:   // fair value gap retest (gap of the last 10 candles)
+        {
+         bool gU = (l > g_wh[j - 2]), gD = (h < g_wl[j - 2]);
+         int kU = -1, kD = -1;
+         for(int k = j - 1; k >= j - 10 && k >= 2; k--)
+           {
+            if(kU < 0 && g_wl[k] > g_wh[k - 2]) kU = k;
+            if(kD < 0 && g_wh[k] < g_wl[k - 2]) kD = k;
+           }
+         L = (!gU && kU >= 0 && g_we20[j] > g_we50[j] && l <= g_wl[kU] && c > g_wh[kU - 2] && c > o);
+         S = (!gD && kD >= 0 && g_we20[j] < g_we50[j] && h >= g_wh[kD] && c < g_wl[kD - 2] && c < o);
+         break;
+        }
+      case 5:   // IBS big-bar fade
+        {
+         double ibs = (c - l) / MathMax(rng, 1e-12);
+         L = (rng > 1.5 * atr && ibs < 0.15);
+         S = (rng > 1.5 * atr && ibs > 0.85);
+         break;
+        }
+      case 6:   // Keltner fade
+         L = (c < g_we20[j] - 2.0 * atr);
+         S = (c > g_we20[j] + 2.0 * atr);
+         break;
+      case 7:   // pivot S1 / R1 bounce
+        {
+         double dh = 0, dl = 0, dc = 0;
+         if(!MemPrevDay(j, dh, dl, dc)) return 0;
+         double pv = (dh + dl + dc) / 3.0, r1 = 2.0 * pv - dl, s1 = 2.0 * pv - dh;
+         L = (l <= s1 && c > s1);
+         S = (h >= r1 && c < r1);
+         break;
+        }
+      case 8:   // RSI(2) dip in the trend
+         L = (upT && g_wrsi2[j] < 10);
+         S = (dnT && g_wrsi2[j] > 90);
+         break;
+      case 9:   // round number rejection
+        {
+         double st = MemRoundStep();
+         double fl0 = MathFloor(pc / st) * st, ce0 = MathCeil(pc / st) * st;
+         L = (l <= fl0 && c > fl0);
+         S = (h >= ce0 && c < ce0);
+         break;
+        }
+      case 10:  // Stochastic 20 / 80 cross
+         L = (g_wstk[j] > g_wstd[j] && g_wstk[j - 1] <= g_wstd[j - 1] && g_wstd[j] < 20);
+         S = (g_wstk[j] < g_wstd[j] && g_wstk[j - 1] >= g_wstd[j - 1] && g_wstd[j] > 80);
+         break;
+      case 11:  // three soldiers / three crows
+         L = (c > o && po < pc && g_wo[j - 2] < g_wc[j - 2] && c > pc && pc > g_wc[j - 2] && body > 0.5 * rng);
+         S = (c < o && po > pc && g_wo[j - 2] > g_wc[j - 2] && c < pc && pc < g_wc[j - 2] && body > 0.5 * rng);
+         break;
+      case 12:  // z-score from EMA50 fade
+         L = ((c - g_we50[j]) / atr < -3.0);
+         S = ((c - g_we50[j]) / atr > 3.0);
+         break;
+      case 13:  // engulfing
+         L = (c > o && pc < po && c >= po && o <= pc);
+         S = (c < o && pc > po && c <= po && o >= pc);
+         break;
+      case 14:  // previous-day high / low sweep
+        {
+         double dh2 = 0, dl2 = 0, dc2 = 0;
+         if(!MemPrevDay(j, dh2, dl2, dc2)) return 0;
+         L = (l < dl2 && c > dl2);
+         S = (h > dh2 && c < dh2);
+         break;
+        }
+      case 15:  // round number break
+        {
+         double st2 = MemRoundStep();
+         double a1 = MathFloor(c / st2), a0 = MathFloor(pc / st2);
+         L = (a1 > a0);
+         S = (a1 < a0);
+         break;
+        }
+      default:
+         return 0;
+     }
+   if(L && !S) return 1;
+   if(S && !L) return -1;
+   return 0;
+  }
+
+//------------------------------------------------------------------
+// SITUATION: higher-timeframe trends, volatility band, session, H4 W / M pattern
+//------------------------------------------------------------------
+//--- trend of the last completed candle of tf: +1 close > EMA50 and EMA20 > EMA50, -1 mirror, 0 flat; side200 = D1 close vs EMA200
+int MemTrend(int tf, int &side200)
+  {
+   side200 = 0;
+   int bars = iBars(_Symbol, tf) - 2;
+   if(bars < 52) return 0;
+   int n = (bars > MNB) ? MNB : bars;
+   double a20 = 2.0 / 21.0, a50 = 2.0 / 51.0, a200 = 2.0 / 201.0;
+   double e20 = 0, e50 = 0, e200 = 0;
+   for(int i = 0; i < n; i++)
+     {
+      double c = iClose(_Symbol, tf, n - i);
+      if(i == 0) { e20 = c; e50 = c; e200 = c; continue; }
+      e20 = a20 * c + (1.0 - a20) * e20;
+      e50 = a50 * c + (1.0 - a50) * e50;
+      e200 = a200 * c + (1.0 - a200) * e200;
+     }
+   double cl = iClose(_Symbol, tf, 1);
+   if(n >= 201) side200 = (cl > e200) ? 1 : -1;
+   if(cl > e50 && e20 > e50) return 1;
+   if(cl < e50 && e20 < e50) return -1;
+   return 0;
+  }
+
+//--- W (+1) / M (-1) breakout on tf within the last 6 completed candles (0 none) - double bottom / top with a neckline break
+int MemPattern(int tf)
+  {
+   int bars = iBars(_Symbol, tf) - 2;
+   if(bars < 80) return 0;
+   int n = (bars > MPB) ? MPB : bars;
+   double h[], l[], c[], atr[];
+   ArrayResize(h, n);
+   ArrayResize(l, n);
+   ArrayResize(c, n);
+   ArrayResize(atr, n);
+   for(int i = 0; i < n; i++)
+     {
+      int sh = n - i;
+      h[i] = iHigh(_Symbol, tf, sh);
+      l[i] = iLow(_Symbol, tf, sh);
+      c[i] = iClose(_Symbol, tf, sh);
+     }
+   double tr[];
+   ArrayResize(tr, n);
+   double s = 0;
+   for(int i = 0; i < n; i++)
+     {
+      tr[i] = (i == 0) ? h[0] - l[0] : MathMax(h[i], c[i - 1]) - MathMin(l[i], c[i - 1]);
+      s += tr[i];
+      if(i >= 14) s -= tr[i - 14];
+      atr[i] = (i >= 13) ? s / 14.0 : 0.0;
+     }
+   int lo1 = -1, lo2 = -1, hi1 = -1, hi2 = -1, lastE = -1, lastS = 0;
+   for(int j = 4; j < n; j++)
+     {
+      int k = j - 2;
+      if(l[k] < l[k - 1] && l[k] < l[k - 2] && l[k] <= l[k + 1] && l[k] <= l[k + 2]) { lo1 = lo2; lo2 = k; }
+      if(h[k] > h[k - 1] && h[k] > h[k - 2] && h[k] >= h[k + 1] && h[k] >= h[k + 2]) { hi1 = hi2; hi2 = k; }
+      double a = atr[j];
+      if(!(a > 0)) continue;
+      if(lo1 >= 0 && lo2 - lo1 >= 5 && lo2 - lo1 <= 60 && MathAbs(l[lo2] - l[lo1]) <= 0.3 * a)
+        {
+         double neck = h[lo1];
+         for(int q = lo1; q <= lo2; q++) if(h[q] > neck) neck = h[q];
+         if(neck - MathMax(l[lo1], l[lo2]) >= a && c[j] > neck && c[j - 1] <= neck && j - lo2 <= 30) { lastE = j; lastS = 1; }
+        }
+      if(hi1 >= 0 && hi2 - hi1 >= 5 && hi2 - hi1 <= 60 && MathAbs(h[hi2] - h[hi1]) <= 0.3 * a)
+        {
+         double neck2 = l[hi1];
+         for(int q = hi1; q <= hi2; q++) if(l[q] < neck2) neck2 = l[q];
+         if(MathMin(h[hi1], h[hi2]) - neck2 >= a && c[j] < neck2 && c[j - 1] >= neck2 && j - hi2 <= 30) { lastE = j; lastS = -1; }
+        }
+     }
+   if(lastE >= 0 && (n - 1) - lastE <= 5) return lastS;
+   return 0;
+  }
+
+//--- session of the current time (UTC): 0 Asia 00-07, 1 London 07-12, 2 New York 12-17, 3 late 17-24, 4 crypto weekend
+int MemSession()
+  {
+   datetime u = NowUTC();
+   if(IsCrypto())
+     {
+      int dw = TimeDayOfWeek(u);
+      if(dw == 0 || dw == 6) return 4;
+     }
+   int hr = TimeHour(u);
+   if(hr < 7) return 0;
+   if(hr < 12) return 1;
+   if(hr < 17) return 2;
+   return 3;
+  }
+
+int MemFindCell(int tfm, int sid, int sit)
+  {
+   int c = MemSymClass();
+   for(int i = 0; i < MEM_N; i++) if(g_mCls[i] == c && g_mTf[i] == tfm && g_mSt[i] == sid && g_mSit[i] == sit) return i;
+   return -1;
+  }
+
+//--- best learnt record for a strategy on this timeframe in ANY situation (panel, when the exact situation is not learnt)
+int MemBestCellOf(int tfm, int sid)
+  {
+   int best = -1;
+   for(int i = 0; i < MEM_N; i++)
+     {
+      if(g_mCls[i] != MemSymClass() || g_mTf[i] != tfm || g_mSt[i] != sid) continue;
+      if(best < 0 || g_mN[i] > g_mN[best]) best = i;
+     }
+   return best;
+  }
+
+string MemSitText(int tfm, int t1, int t2, int t3, int vb, int ss, int pat)
+  {
+   string tr = (tfm == 15) ? "H1 " + MemTrendWord(t1) + ", H4 " + MemTrendWord(t2) + ", D1 " + MemTrendWord(t3)
+               : "H4 " + MemTrendWord(t1) + ", D1 " + MemTrendWord(t2) + ", D1 " + ((t3 > 0) ? "above" : ((t3 < 0) ? "below" : "near")) + " EMA200";
+   return tr + " | volatility " + BandName(vb) + " | " + MemSessionName(ss) + " | H4 pattern " + MemPatWord(pat);
+  }
+
+//------------------------------------------------------------------
+// LIVE LEARNING: every memory trade (real or shadow) updates its setup's live record; a failing setup is paused
+//------------------------------------------------------------------
+string MemGV(int cell, string f) { return g_SP + "ML_" + _Symbol + "_C" + IntegerToString(cell) + "_" + f; }
+
+void MemLiveAdd(int cell, double r, bool real)
+  {
+   if(cell < 0 || cell >= MEM_N) return;
+   GVSet(MemGV(cell, "N"), GVGet(MemGV(cell, "N"), 0) + 1);
+   GVSet(MemGV(cell, "R"), GVGet(MemGV(cell, "R"), 0) + r);
+   if(r > 0) GVSet(MemGV(cell, "W"), GVGet(MemGV(cell, "W"), 0) + 1);
+   if(real) GVSet(MemGV(cell, "NR"), GVGet(MemGV(cell, "NR"), 0) + 1);
+  }
+
+bool MemPaused(int cell)
+  {
+   if(cell < 0 || cell >= MEM_N || MemoryPauseAfter <= 0) return false;
+   double n = GVGet(MemGV(cell, "N"), 0);
+   if(n < MemoryPauseAfter) return false;
+   return (GVGet(MemGV(cell, "R"), 0) / n <= MemoryPauseR);
+  }
+
+//--- totals of the live record (all setups of this chart)
+void MemLiveTotals(int &n, int &nr, double &rs, int &paused)
+  {
+   n = 0;
+   nr = 0;
+   rs = 0;
+   paused = 0;
+   for(int i = 0; i < MEM_N; i++)
+     {
+      n += (int)GVGet(MemGV(i, "N"), 0);
+      nr += (int)GVGet(MemGV(i, "NR"), 0);
+      rs += GVGet(MemGV(i, "R"), 0);
+      if(MemPaused(i)) paused++;
+     }
+  }
+
+//------------------------------------------------------------------
+// SHADOW TRADES (virtual: the EA follows the setup with the real prices but sends no order)
+//------------------------------------------------------------------
+void MemShadowAdd(int cell, int d, double slD, double tpD, int mex, int maxm, double atr)
+  {
+   for(int i = 0; i < MSHN; i++)
+     {
+      if(g_shOn[i]) continue;
+      RefreshRates();
+      double en = (d > 0) ? Ask : Bid;
+      g_shOn[i] = true;
+      g_shCell[i] = cell;
+      g_shDir[i] = d;
+      g_shEx[i] = mex;
+      g_shMaxM[i] = maxm;
+      g_shEn[i] = en;
+      g_shR[i] = slD;
+      g_shSL[i] = en - d * slD;
+      g_shTP[i] = (tpD > 0) ? en + d * tpD : 0.0;
+      g_shAtr[i] = atr;
+      g_shPk[i] = 0;
+      g_shT[i] = TimeCurrent();
+      return;
+     }
+  }
+
+void MemShadowClose(int i, double px, string why)
+  {
+   int d = g_shDir[i];
+   double r = (g_shR[i] > 0) ? d * (px - g_shEn[i]) / g_shR[i] : 0.0;
+   int cell = g_shCell[i];
+   MemLiveAdd(cell, r, false);
+   g_shOn[i] = false;
+   if(cell >= 0 && cell < MEM_N)
+      CsvLine("AK10_shadow_" + DateKey() + "_" + _Symbol + ".csv", "Date,Symbol,Side,OpenTimeIST,CloseTimeIST,Setup,Timeframe,Exit,Entry,ExitPrice,ResultR,Reason",
+              DateKey() + "," + _Symbol + "," + SideName(d) + "," + IstStamp(g_shT[i]) + "," + IstStamp(TimeCurrent()) + "," + CsvSafe(g_msName[g_mSt[cell]]) + "," +
+              ((g_mTf[cell] == 15) ? "M15" : "H1") + "," + MemExitName(g_shEx[i]) + "," + Px(g_shEn[i]) + "," + Px(px) + "," + DoubleToString(r, 2) + "," + why);
+  }
+
+void MemShadowTick()
+  {
+   RefreshRates();
+   for(int i = 0; i < MSHN; i++)
+     {
+      if(!g_shOn[i]) continue;
+      int d = g_shDir[i];
+      double px = (d > 0) ? Bid : Ask;
+      double fav = d * (px - g_shEn[i]);
+      if(fav > g_shPk[i]) g_shPk[i] = fav;
+      if(d * (px - g_shSL[i]) <= 0) { MemShadowClose(i, g_shSL[i], "stop"); continue; }
+      if(g_shTP[i] > 0 && d * (px - g_shTP[i]) >= 0) { MemShadowClose(i, g_shTP[i], "target"); continue; }
+      if(g_shEx[i] == MEX_TREND)
+        {
+         double a = g_shAtr[i];
+         if(g_shPk[i] >= 2.0 * a && d * (g_shSL[i] - g_shEn[i]) < 0) g_shSL[i] = g_shEn[i] + d * 0.1 * a;
+         if(g_shPk[i] >= 3.0 * a)
+           {
+            double ns = g_shEn[i] + d * (g_shPk[i] - 3.0 * a);
+            if(d * (ns - g_shSL[i]) > 0) g_shSL[i] = ns;
+           }
+        }
+      int sh = iBarShift(_Symbol, PERIOD_M1, g_shT[i], false);
+      int mm = (sh >= 0) ? sh : (int)((TimeCurrent() - g_shT[i]) / 60);
+      if(g_shMaxM[i] > 0 && mm >= g_shMaxM[i]) MemShadowClose(i, px, "time limit");
+     }
+  }
+
+int MemShadowOpen()
+  {
+   int c = 0;
+   for(int i = 0; i < MSHN; i++) if(g_shOn[i]) c++;
+   return c;
+  }
+
+//--- shadow trades of one setup (one at a time per setup, as in the analysis)
+int MemShadowCount(int tfm, int sid)
+  {
+   int c = 0;
+   for(int i = 0; i < MSHN; i++)
+     {
+      if(!g_shOn[i]) continue;
+      int cell = g_shCell[i];
+      if(cell >= 0 && cell < MEM_N && g_mTf[cell] == tfm && g_mSt[cell] == sid) c++;
+     }
+   return c;
+  }
+
+//------------------------------------------------------------------
+// MEMORY TRADES
+//------------------------------------------------------------------
+int MemOpenCount(int tfm, int sid)
+  {
+   int c = 0;
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+     {
+      if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
+      if(!MyOrder() || MethodOfMagic(OrderMagicNumber()) != M_MEM) continue;
+      long key = OrderKey();
+      if(sid >= 0 && ((int)PGet(key, "MTF", 0) != tfm || (int)PGet(key, "FAM", -1) != sid)) continue;
+      c++;
+     }
+   return c;
+  }
+
+//--- lot: fixed MemoryLot, or (risk lot mode) the memory risk % x setup strength (0.5x - 1.5x), never below the minimum lot
+double MemLots(double slD, int cell)
+  {
+   double f = (g_cls == SC_GOLD && GoldMemoryMode == GM_SMALL) ? 0.5 : 1.0;      // gold Memory: small lot (option)
+   if(LotMode != AK_LOT_RISK) return NormLot(((g_cls == SC_ETH) ? MemoryLotETH : MemoryLot) * f);
+   double conf = (cell >= 0) ? g_mAvgR[cell] / 0.45 : 1.0;
+   if(conf < 0.5) conf = 0.5;
+   if(conf > 1.5) conf = 1.5;
+   double v1 = ValuePerPrice(1.0), bal = AccountBalance();
+   if(v1 <= 0 || bal <= 0 || slD <= 0) return NormLot(0);
+   return NormLot(bal * MemoryRiskPct / 100.0 * conf * f / (slD * v1));
+  }
+
+bool MemRealMode()
+  {
+   if(MemoryMode == MEM_ON) return true;
+   if(MemoryMode == MEM_AUTO) return (AccountBalance() >= MemoryMinBalance);
+   return false;
+  }
+
+string MemModeText()
+  {
+   if(MemoryMode == MEM_OFF) return "OFF";
+   if(MemoryMode == MEM_SHADOW) return "SHADOW (learning only, no orders)";
+   if(MemoryMode == MEM_ON) return "ON (real trades)";
+   if(AccountBalance() >= MemoryMinBalance) return "AUTO -> real trades (balance " + DoubleToString(AccountBalance(), 0) + " >= " + DoubleToString(MemoryMinBalance, 0) + ")";
+   return "AUTO -> SHADOW (balance " + DoubleToString(AccountBalance(), 0) + " < " + DoubleToString(MemoryMinBalance, 0) + ", virtual trades keep learning)";
+  }
+
+string MemStory(int cell, int d, string sit)
+  {
+   string s = "Memory: on " + _Symbol + " this setup (" + g_msName[g_mSt[cell]] + " on " + ((g_mTf[cell] == 15) ? "M15" : "H1") + ") fired in the same situation " +
+              IntegerToString(g_mN[cell]) + " times since " + MemDate(g_mFirst[cell]) + " and won " + DoubleToString(g_mWin[cell], 0) + "% with an average of " +
+              ((g_mAvgR[cell] >= 0) ? "+" : "") + DoubleToString(g_mAvgR[cell], 2) + "R after spread. Last times: " + MemDate(g_mD1[cell]) + " (" + MemResWord(g_mR1[cell]) + "), " +
+              MemDate(g_mD2[cell]) + " (" + MemResWord(g_mR2[cell]) + "), " + MemDate(g_mD3[cell]) + " (" + MemResWord(g_mR3[cell]) + "). Situation now: " + sit + ".";
+   return s;
+  }
+
+bool PlaceMemTrade(int cell, int d, int tfm, int sit, double atr, double slD, double tpD, double lots, string sitTxt)
+  {
+   int cmd = (d > 0) ? OP_BUY : OP_SELL;
+   int sid = g_mSt[cell], mex = g_mEx[cell];
+   string cmt = TradeComment + " MEM " + ((tfm == 15) ? "M15" : "H1") + " S" + IntegerToString(sid) + " E" + IntegerToString(mex);
+   int tk = -1, err = 0;
+   double price = 0, sl = 0, tp = 0;
+   for(int a = 0; a < 3 && tk < 0; a++)
+     {
+      RefreshRates();
+      price = (d > 0) ? Ask : Bid;
+      sl = NormalizeDouble(price - d * slD, Digits);
+      tp = (tpD > 0) ? NormalizeDouble(price + d * tpD, Digits) : 0.0;
+      tk = OrderSend(_Symbol, cmd, lots, NormalizeDouble(price, Digits), 10, sl, tp, cmt, MethodMagic(M_MEM), 0, (d > 0) ? clrDodgerBlue : clrTomato);
+      if(tk < 0)
+        {
+         err = GetLastError();
+         if(err == 130)
+           {
+            tk = OrderSend(_Symbol, cmd, lots, NormalizeDouble(price, Digits), 10, 0, 0, cmt, MethodMagic(M_MEM), 0, (d > 0) ? clrDodgerBlue : clrTomato);
+            if(tk > 0 && OrderSelect(tk, SELECT_BY_TICKET)) { if(!OrderModify(tk, OrderOpenPrice(), sl, tp, 0, clrNONE)) Print("[AK10] memory stop/target could not be set right away, error ", GetLastError(), " - retrying from the trade manager"); }
+            break;
+           }
+         if(!RetryErr(err)) break;
+         Sleep(300);
+        }
+     }
+   if(tk < 0)
+     {
+      g_memLast = SideName(d) + " " + g_msName[sid] + " - order rejected by the broker (error " + IntegerToString(err) + ")";
+      Note(M_MEM, g_memLast, -1);
+      Print("[AK10] memory ", g_memLast);
+      return false;
+     }
+   string pre = g_SP + DateKey() + "_" + _Symbol;
+   GVSet(pre + "_OPN", GVGet(pre + "_OPN", 0) + 1);
+   GVSet(pre + "_OPNMEM", GVGet(pre + "_OPNMEM", 0) + 1);
+   g_memTick = true;
+   if(!OrderSelect(tk, SELECT_BY_TICKET)) { Print("[AK10] memory order #", tk, " opened but could not be read yet"); return true; }
+   long key = OrderKey();
+   double open = OrderOpenPrice();
+   double R = d * (open - sl);
+   if(R <= 0) R = slD;
+   PClear(key);
+   PSet(key, "DIR", d);
+   PSet(key, "LAY", LY_MEM);
+   PSet(key, "FAM", sid);
+   PSet(key, "EXP", EX_MEM);
+   PSet(key, "MEX", mex);
+   PSet(key, "MTF", tfm);
+   PSet(key, "CELL", cell);
+   PSet(key, "SIT", sit);
+   PSet(key, "MAXM", MemMaxBars(mex) * tfm);
+   PSet(key, "EN", open);
+   PSet(key, "SL0", sl);
+   PSet(key, "CSL", sl);
+   PSet(key, "R", R);
+   PSet(key, "LOT0", lots);
+   PSet(key, "TIER", 0);
+   PSet(key, "ATR", atr);
+   if(tp > 0) PSet(key, "TP", tp);
+   PSet(key, "SPP", (R > 0) ? 100.0 * (Ask - Bid) / R : 0);
+   PSet(key, "TD1", TrendOf(PERIOD_D1));
+   PSet(key, "TH4", TrendOf(PERIOD_H4));
+   PSet(key, "PUB", 0);
+   PSet(key, "VIP", (MemoryCards && SendToVip && (tfm == 60 || VipLowTFCards)) ? 1 : 0);
+   PSet(key, "VRK", VolRank());
+   PSet(key, "HK", -1);
+   PSet(key, "PRT", 2);
+   PSet(key, "PB", g_ptsB);
+   PSet(key, "PS", g_ptsS);
+   PSet(key, "PTB", (double)g_ptsBar);
+   TrackAdd(key);
+   MarkSignal(M_MEM, d, (tfm == 15) ? PERIOD_M15 : PERIOD_H1, "S" + IntegerToString(sid) + ((tfm == 15) ? " M15" : " H1"), true, "");
+   MemNotifyOpen(key, MemStory(cell, d, sitTxt));
+   InstaEvent("open", key, PGet(key, "EN", 0), 0, "");
+   g_memLast = "opened " + SideName(d) + " " + ((tfm == 15) ? "M15 " : "H1 ") + g_msName[sid] + " (" + MemExitName(mex) + ") @ " + Px(open) + " at " + IstClock(TimeCurrent()) + " IST";
+   g_memAct = g_memLast;
+   g_memLastT = TimeCurrent();
+   Note(M_MEM, g_memLast, -1);
+   SetLastTrade(IstStamp(TimeCurrent()) + " IST | Memory | " + SideName(d) + " | " + ((tfm == 15) ? "M15 " : "H1 ") + g_msName[sid] + " | " + DoubleToString(lots, 2) + " lot @ " + Px(open) + " SL " + Px(sl));
+   Print("[AK10] MEMORY ", g_memLast, " | ", DoubleToString(lots, 2), " lot | risk ", DoubleToString(R * ValuePerPrice(lots), 2), " USD | ", sitTxt);
+   return true;
+  }
+
+//--- a learnt setup fired in a learnt situation: real trade, shadow trade or skip
+void MemTake(int cell, int d, int tfm, int sit, string sitTxt)
+  {
+   int sid = g_mSt[cell], mex = g_mEx[cell];
+   double atr = g_watr[g_wn - 1];
+   double slD = (mex == MEX_TREND) ? 1.5 * atr : atr;
+   double tpD = (mex == MEX_TREND) ? 0.0 : (mex + 1) * atr;
+   int maxm = MemMaxBars(mex) * tfm;
+   string head = SideName(d) + " " + ((tfm == 15) ? "M15 " : "H1 ") + g_msName[sid] + " at " + IstClock(TimeCurrent()) + " IST (record " + IntegerToString(g_mN[cell]) + " times, won " +
+                 DoubleToString(g_mWin[cell], 0) + "%, avg " + ((g_mAvgR[cell] >= 0) ? "+" : "") + DoubleToString(g_mAvgR[cell], 2) + "R)";
+   g_memLastT = TimeCurrent();
+   if(MemPaused(cell)) { g_memLast = head + " - skipped: this setup is paused (its live results fell below " + DoubleToString(MemoryPauseR, 2) + "R)"; return; }
+   //--- gold: no entries in the hour around the daily rollover or late Friday (as in the analysis)
+   int sh = TimeHour(TimeCurrent()), dw = TimeDayOfWeek(TimeCurrent());
+   if(!IsCrypto() && (sh == 23 || sh == 0 || (dw == 5 && sh >= 22))) { g_memLast = head + " - skipped: rollover / Friday-close hour"; return; }
+   if(MemOpenCount(tfm, sid) > 0 || MemShadowCount(tfm, sid) > 0) { g_memLast = head + " - skipped: this setup already has an open (or shadow) trade"; return; }
+   if(!MemRealMode())
+     {
+      MemShadowAdd(cell, d, slD, tpD, mex, maxm, atr);
+      g_memLast = head + " -> SHADOW trade (virtual, learning)";
+      g_memAct = g_memLast;
+      return;
+     }
+   if(g_memTick) { g_memLast = head + " - followed as a shadow trade (one new memory trade per candle)"; MemShadowAdd(cell, d, slD, tpD, mex, maxm, atr); g_memAct = g_memLast; return; }
+   if(MemOpenCount(0, -1) >= MemoryMaxOpen) { g_memLast = head + " - skipped: " + IntegerToString(MemoryMaxOpen) + " memory trades already open (followed as a shadow trade)"; MemShadowAdd(cell, d, slD, tpD, mex, maxm, atr); g_memAct = g_memLast; return; }
+   RefreshRates();
+   double spread = Ask - Bid;
+   if(UseSpreadFilter && MaxSpreadPctSL > 0 && spread > MaxSpreadPctSL / 100.0 * slD) { g_memLast = head + " - skipped: spread is " + DoubleToString(100.0 * spread / slD, 0) + "% of the stop"; return; }
+   string tb = "";
+   if(TimeBlock(tb)) { g_memLast = head + " - skipped: " + tb; return; }
+   double lots = MemLots(slD, cell);
+   string gnote = "";
+   lots = GuardLots(lots, d, gnote);
+   if(lots <= 0) { g_memLast = head + " - skipped: " + gnote; return; }
+   string why = "";
+   bool quiet = false;
+   if(!EntryGates(slD, lots, why, quiet, M_MEM))
+     {
+      g_memLast = head + " - not taken: " + why + (quiet ? " (followed as a shadow trade)" : "");
+      if(quiet) { MemShadowAdd(cell, d, slD, tpD, mex, maxm, atr); g_memAct = g_memLast; }
+      return;
+     }
+   PlaceMemTrade(cell, d, tfm, sit, atr, slD, tpD, lots, sitTxt);
+  }
+
+//--- a new M15 or H1 candle closed: run the 16 strategies, look each signal up in the memory
+void MemCheckTf(int tf)
+  {
+   int tfm = (tf == PERIOD_M15) ? 15 : 60;
+   int s200 = 0, dummy = 0;
+   int t1 = 0, t2 = 0, t3 = 0;
+   if(tfm == 15) { t1 = MemTrend(PERIOD_H1, dummy); t2 = MemTrend(PERIOD_H4, dummy); t3 = MemTrend(PERIOD_D1, dummy); }
+   else { t1 = MemTrend(PERIOD_H4, dummy); t2 = MemTrend(PERIOD_D1, s200); t3 = s200; }
+   int vb = VolBand(), ss = MemSession(), pat = MemPattern(PERIOD_H4);
+   string sitTxt = MemSitText(tfm, t1, t2, t3, vb, ss, pat);
+   g_memSit = ((tfm == 15) ? "M15 signals: " : "H1 signals: ") + sitTxt;
+   if(!MemLoad(tf)) return;
+   int j = g_wn - 1;
+   for(int sid = 0; sid < MEM_STRATS; sid++)
+     {
+      int d = MemSignal(sid, j);
+      if(d == 0) continue;
+      int A = ((t1 == d) ? 1 : 0) + ((t2 == d) ? 1 : 0) + ((t3 == d) ? 1 : 0);
+      int P = (pat == d) ? 2 : ((pat == 0) ? 1 : 0);
+      int sit = ((A * 3 + vb) * 5 + ss) * 3 + P;
+      int cell = MemFindCell(tfm, sid, sit);
+      if(cell < 0)
+        {
+         int bc = MemBestCellOf(tfm, sid);
+         if(bc >= 0)
+           {
+            g_memLast = SideName(d) + " " + ((tfm == 15) ? "M15 " : "H1 ") + g_msName[sid] + " at " + IstClock(TimeCurrent()) + " IST - no trade: in THIS situation (" + IntegerToString(A) +
+                        " of 3 trends agree) it was not profitable after spread (learnt only in other situations)";
+            g_memLastT = TimeCurrent();
+           }
+         continue;
+        }
+      MemTake(cell, d, tfm, sit, sitTxt);
+     }
+  }
+
+void MemScan(bool newM15, bool newH1)
+  {
+   g_memTick = false;
+   if(MemoryMode == MEM_OFF || !MemTradesHere()) return;
+   if(g_cls == SC_GOLD && GoldMemoryMode == GM_OFF) return;                      // gold Memory switched off (option)
+   if(newH1) MemCheckTf(PERIOD_H1);
+   if(newM15) MemCheckTf(PERIOD_M15);
+  }
+
+//--- management of a memory trade (called from ManageOne): learnt exit, time limit, tiers for the cards
+void MemManageOne(int tk, long key, int dir, double open, double sl, double px, double R, double fav, double peak, int mm)
+  {
+   int mex = (int)PGet(key, "MEX", MEX_TREND);
+   double atr = PGet(key, "ATR", 0);
+   if(atr <= 0) atr = (mex == MEX_TREND) ? R / 1.5 : R;
+   int maxm = (int)PGet(key, "MAXM", 0);
+   if(maxm > 0 && mm >= maxm) { CloseTrade(tk, dir, key, CR_TIME); return; }
+   if(mex != MEX_TREND)
+     {
+      double tpx = PGet(key, "TP", 0);
+      if(tpx > 0 && OrderSelect(tk, SELECT_BY_TICKET) && OrderTakeProfit() <= 0)
+        {
+         if(dir * (px - tpx) >= 0) { CloseTrade(tk, dir, key, CR_TP); return; }
+         SetTP(tk, dir, tpx);
+        }
+     }
+   else
+     {
+      //--- TREND RIDE: stop to entry + 0.1 ATR at +2 ATR, trailing 3 ATR behind the best price from +3 ATR
+      if(peak >= 2.0 * atr && (sl <= 0 || dir * (sl - open) < 0))
+        {
+         if(ModifySL(tk, dir, key, open + dir * 0.1 * atr)) PSet(key, "NLN", 1);
+         else if(fav <= 0.1 * atr) { CloseTrade(tk, dir, key, CR_NOLOSS); return; }
+         if(!OrderSelect(tk, SELECT_BY_TICKET)) return;
+         sl = OrderStopLoss();
+        }
+      if(peak >= 3.0 * atr)
+        {
+         double ns = open + dir * (peak - 3.0 * atr);
+         if(sl <= 0 || dir * (ns - sl) > MathMax(Point, 0.05 * atr))
+           {
+            if(ModifySL(tk, dir, key, ns)) PSet(key, "TRL", 1);
+           }
+        }
+     }
+   int tier = TierOfR((R > 0) ? peak / R : 0);
+   int told = (int)PGet(key, "TIER", 0);
+   if(tier > told)
+     {
+      PSet(key, "TIER", tier);
+      if(tier >= TierCardFrom && MemoryCards) NotifyTier(key, dir, tier);
+     }
+  }
+
+//------------------------------------------------------------------
+// M1 / M5 ANALYSIS (panel): the same M5 situation in 5 years of data, how the next $10 move (0.1 lot) went, and the spread
+//------------------------------------------------------------------
+void MemM5Analysis()
+  {
+   datetime b = iTime(_Symbol, PERIOD_M5, 0);
+   if(b == g_m5Bar || b == 0) return;
+   g_m5Bar = b;
+   int cls = MemSymClass();
+   if(cls < 0) { g_m5Txt = "no M1 history for this symbol (analysed: XAUUSD, BTCUSD, ETHUSD, EURUSD, USOIL)"; return; }
+   int dummy = 0;
+   int t15 = MemTrend(PERIOD_M15, dummy), t60 = MemTrend(PERIOD_H1, dummy), t240 = MemTrend(PERIOD_H4, dummy);
+   int score = t15 + t60 + t240;
+   int vb = VolBand(), ss = MemSession();
+   int p1 = MemPattern(PERIOD_H1);
+   int pat = (p1 != 0) ? p1 : MemPattern(PERIOD_H4);
+   int code = (((score + 3) * 3 + vb) * 5 + ss) * 3 + (pat + 1);
+   int row = -1;
+   for(int i = 0; i < SIT_N; i++) if(g_sCls[i] == cls && g_sCode[i] == code) { row = i; break; }
+   string sit = "trends M15 " + MemTrendWord(t15) + " H1 " + MemTrendWord(t60) + " H4 " + MemTrendWord(t240) + " | " + BandName(vb) + " | " + MemSessionName(ss) + " | pattern " + MemPatWord(pat);
+   if(row < 0) { g_m5Txt = sit + " -> this situation did not occur in the history"; return; }
+   RefreshRates();
+   double c01 = (Ask - Bid) * ValuePerPrice(0.1);
+   double p = g_sU10[row] / 100.0;
+   double ev = p * (10.0 - c01) - (1.0 - p) * (10.0 + c01);
+   g_m5Txt = sit + " -> seen " + IntegerToString(g_sN[row]) + " M5 candles in the history (last " + MemDate(g_sD1[row]) + ", " + MemDate(g_sD2[row]) + ", " + MemDate(g_sD3[row]) +
+             "): next $10 move (0.1 lot) went UP " + DoubleToString(g_sU10[row], 0) + "% / DOWN " + DoubleToString(100.0 - g_sU10[row], 0) + "% | spread now " + DoubleToString(c01, 2) +
+             " USD per 0.1 lot -> a $10 scalp averages " + Usd(ev) + " USD -> " + ((ev > 0) ? "edge" : "no M1/M5 scalp (spread eats it)");
+  }
+
+//------------------------------------------------------------------
+// TELEGRAM card for a memory trade (simple English)
+//------------------------------------------------------------------
+string MemPlanText(int mex, double R, double atr, double en, int dir)
+  {
+   if(mex == MEX_TREND)
+      return "Plan (TREND RIDE, learnt exit): stop 1.5 ATR. At +2 ATR the stop moves to entry, so the trade can no longer lose. From +3 ATR a trailing stop follows 3 ATR behind the best price. Closed after 120 candles at the latest.";
+   return "Plan (" + MemExitName(mex) + ", learnt exit): stop 1 ATR, target " + IntegerToString(mex + 1) + " ATR at " + Px(en + dir * (mex + 1) * atr) + ". Closed after " +
+          IntegerToString(MemMaxBars(mex)) + " candles at the latest.";
+  }
+
+void MemNotifyOpen(long key, string story)
+  {
+   if(!MemoryCards) return;
+   int dir = (int)PGet(key, "DIR", 0);
+   int sid = (int)PGet(key, "FAM", 0), mex = (int)PGet(key, "MEX", MEX_TREND), tfm = (int)PGet(key, "MTF", 15);
+   if(sid < 0 || sid >= MEM_STRATS) sid = 0;
+   double en = PGet(key, "EN", 0), sl = PGet(key, "SL0", 0), R = PGet(key, "R", 0), lots = PGet(key, "LOT0", 0), atr = PGet(key, "ATR", 0);
+   double tp = (mex != MEX_TREND) ? PGet(key, "TP", en + dir * (mex + 1) * atr) : 0;
+   string adm = SideDot(dir) + " <b>" + SideName(dir) + " " + HtmlEsc(_Symbol) + "</b>  |  Memory | " + ((tfm == 15) ? "M15 " : "H1 ") + HtmlEsc(g_msName[sid]) + "\n" + Divider() +
+                "\n" + Emo(0x1F4CD) + " Entry: <code>" + Px(en) + "</code>" +
+                "\n" + Emo(0x1F6D1) + " Stop: <code>" + Px(sl) + "</code>" +
+                ((mex != MEX_TREND) ? "\n" + Emo(0x1F3AF) + " Target: <code>" + Px(tp) + "</code>" : "\n" + Emo(0x1F512) + " No-loss stop at: <code>" + Px(en + dir * 2.0 * atr) + "</code> (+2 ATR)") +
+                "\n" + Emo(0x1F4CA) + " Points BUY " + IntegerToString((int)PGet(key, "PB", 0)) + " / SELL " + IntegerToString((int)PGet(key, "PS", 0)) +
+                "\n" + Emo(0x1F9E0) + " " + HtmlEsc(story) +
+                "\n\n" + Emo(0x1F4B0) + " " + MemPlanText(mex, R, atr, en, dir);
+   double riskUSD = R * ValuePerPrice(lots);
+   adm += "\n\nLots " + DoubleToString(lots, 2) + " | risk " + DoubleToString(riskUSD, 2) + " USD" +
+          ((AccountBalance() > 0) ? " (" + DoubleToString(100.0 * riskUSD / AccountBalance(), 2) + "% of balance)" : "") + " | " + OpenCountText();
+   string plan = (mex == MEX_TREND) ? "No fixed target: once the trade is well in profit the stop moves to entry (risk-free) and then trails behind price."
+                 : "Target " + Px(tp) + "; the trade is closed at the target, at the stop, or after a set time.";
+   string ok = OpenKey(key);
+   if(IsTesting() && !TgPreviewOn()) return;
+   SendOnceId(ok, AdminChatId, adm, "", 0);
+   if(PGet(key, "VIP", 0) > 0)
+      SendOnceId(ok, VipChannelId, ChannelOpenCard(dir, en, sl, 0, tp, ProMemTitle(sid, dir), (tfm == 15) ? PERIOD_M15 : PERIOD_H1, ProMemIdea(sid, dir, tfm), plan, false, false), "", 0);
+   TryOpenPhoto(key);
+  }
+
+string MemModeShort()
+  {
+   if(MemoryMode == MEM_OFF) return "OFF";
+   if(!MemTradesHere()) return "ON (analysis only here)";
+   if(MemoryMode == MEM_SHADOW) return "SHADOW";
+   if(MemoryMode == MEM_ON) return "ON";
+   return MemRealMode() ? "AUTO (real)" : "AUTO (shadow)";
+  }
+
+
+//==================================================================
+// TELEGRAM CORE (v10.3): message ids are kept so every update / exit is posted as a REPLY to its own entry message,
+// inline buttons on the public posts, photos, stickers, polls. The token is never filled in by the EA and a webhook is
+// never deleted. Strategy Tester: with TesterTelegramLog the messages are written to a file (preview) instead of sent.
+//==================================================================
+string HtmlEsc(string s) { StringReplace(s, "&", "&amp;"); StringReplace(s, "<", "&lt;"); StringReplace(s, ">", "&gt;"); return s; }
+string RepeatCh(int cp, int n) { string d = ""; for(int i = 0; i < n; i++) d += ShortToString((ushort)cp); return d; }
+string Divider() { return RepeatCh(0x2501, 15); }                       // a thin bold line
+string TgApi(string m) { return "https://api.telegram.org/bot" + TelegramBotToken + "/" + m; }
+
+int HexToInt(string h)
+  {
+   int v = 0;
+   int n = StringLen(h);
+   for(int i = 0; i < n; i++)
+     {
+      ushort c = StringGetCharacter(h, i);
+      int d = 0;
+      if(c >= '0' && c <= '9') d = c - '0';
+      else if(c >= 'a' && c <= 'f') d = 10 + c - 'a';
+      else if(c >= 'A' && c <= 'F') d = 10 + c - 'A';
+      v = v * 16 + d;
+     }
+   return v;
+  }
+
+string JsonEscape(string s)
+  {
+   string r = "";
+   int n = StringLen(s);
+   for(int i = 0; i < n; i++)
+     {
+      ushort c = StringGetCharacter(s, i);
+      if(c == '\\') r += "\\\\";
+      else if(c == '"') r += "\\\"";
+      else if(c == '\n') r += "\\n";
+      else if(c == '\r') r += "\\r";
+      else if(c == '\t') r += "\\t";
+      else if(c < 32) r += " ";
+      else r += ShortToString(c);
+     }
+   return r;
+  }
+
+string JsonValue(string src, string key, int from)
+  {
+   if(from < 0) return "";
+   string pat = "\"" + key + "\":";
+   int p = StringFind(src, pat, from);
+   if(p < 0) return "";
+   p += StringLen(pat);
+   int n = StringLen(src);
+   while(p < n && StringGetCharacter(src, p) == ' ') p++;
+   if(p >= n) return "";
+   if(StringGetCharacter(src, p) == '"')
+     {
+      p++;
+      string out = "";
+      while(p < n)
+        {
+         ushort c = StringGetCharacter(src, p);
+         if(c == '\\' && p + 1 < n)
+           {
+            ushort e = StringGetCharacter(src, p + 1);
+            if(e == 'u' && p + 5 < n) { out += ShortToString((ushort)HexToInt(StringSubstr(src, p + 2, 4))); p += 6; continue; }
+            if(e == 'n') out += "\n";
+            else if(e == 't') out += " ";
+            else out += ShortToString(e);
+            p += 2;
+            continue;
+           }
+         if(c == '"') break;
+         out += ShortToString(c);
+         p++;
+        }
+      return out;
+     }
+   int q = p;
+   while(q < n)
+     {
+      ushort c2 = StringGetCharacter(src, q);
+      if(c2 == ',' || c2 == '}' || c2 == ']') break;
+      q++;
+     }
+   return TrimStr(StringSubstr(src, p, q - p));
+  }
+
+string StripHtml(string t)
+  {
+   string r = "";
+   bool inTag = false;
+   int n = StringLen(t);
+   for(int i = 0; i < n; i++)
+     {
+      ushort c = StringGetCharacter(t, i);
+      if(c == '<') { inTag = true; continue; }
+      if(c == '>' && inTag) { inTag = false; continue; }
+      if(!inTag) r += ShortToString(c);
+     }
+   StringReplace(r, "&lt;", "<");
+   StringReplace(r, "&gt;", ">");
+   StringReplace(r, "&amp;", "&");
+   return r;
+  }
+
+int HttpRequest(string method, string url, string body, string &response)
+  {
+   char data[];
+   char res[];
+   string rh = "";
+   string headers = "Content-Type: application/json\r\n";
+   if(StringLen(body) > 0)
+     {
+      int n = StringToCharArray(body, data, 0, WHOLE_ARRAY, CP_UTF8);
+      if(n > 0) ArrayResize(data, n - 1);
+     }
+   else ArrayResize(data, 0);
+   ResetLastError();
+   int code = WebRequest(method, url, headers, 5000, data, res, rh);
+   if(code == -1)
+     {
+      int e = GetLastError();
+      response = "MT4 error " + IntegerToString(e);
+      if(e == 4060 || e == 4014)
+        {
+         if(!g_tgUrlErr) Print("[TG] WebRequest blocked. Add https://api.telegram.org in Tools > Options > Expert Advisors > Allow WebRequest for listed URL.");
+         g_tgUrlErr = true;
+        }
+      return -1;
+     }
+   response = CharArrayToString(res, 0, WHOLE_ARRAY, CP_UTF8);
+   return code;
+  }
+
+//--- who a chat id is (preview file / logs)
+string ChatLabel(string chat)
+  {
+   if(chat == AdminChatId) return "ADMIN";
+   if(chat == VipChannelId) return "VIP";
+   if(chat == PublicChannelId) return "PUBLIC";
+   return chat;
+  }
+
+//--- Strategy Tester preview: every message goes to a file (UTF-8 text) with a fake message id
+int g_tgFake = 1000;
+bool TgPreviewOn() { return (IsTesting() && TesterTelegramLog); }
+int TgPreview(string chat, string kind, string text, string markup, int replyTo)
+  {
+   g_tgFake++;
+   int h = FileOpen("AK10_tg_preview.txt", FILE_READ | FILE_WRITE | FILE_TXT | FILE_UNICODE | FILE_SHARE_READ);   // UNICODE keeps the emojis
+   if(h != INVALID_HANDLE)
+     {
+      FileSeek(h, 0, SEEK_END);
+      FileWriteString(h, "=====[" + IstStamp(TimeCurrent()) + " IST] " + ChatLabel(chat) + " " + kind + " id " + IntegerToString(g_tgFake) +
+                      ((replyTo > 0) ? " (reply to " + IntegerToString(replyTo) + ")" : "") + ((StringLen(markup) > 0) ? " [buttons]" : "") + "\r\n" + text + "\r\n");
+      FileClose(h);
+     }
+   return g_tgFake;
+  }
+
+//--- send a text message; returns the Telegram message id (> 0) or -1. markup = inline keyboard JSON ("" none), replyTo = message id (0 none)
+int TgSendEx(string chat, string text, string markup, int replyTo)
+  {
+   if(StringLen(chat) == 0) return -1;
+   if(TgPreviewOn()) return TgPreview(chat, "MSG", text, markup, replyTo);
+   if(!g_tg || g_tgUrlErr) return -1;
+   string tail = (StringLen(markup) > 0) ? ",\"reply_markup\":" + markup : "";
+   string rep = (replyTo > 0) ? ",\"reply_parameters\":{\"message_id\":" + IntegerToString(replyTo) + ",\"allow_sending_without_reply\":true}" : "";
+   string body = "{\"chat_id\":\"" + JsonEscape(chat) + "\",\"text\":\"" + JsonEscape(text) + "\",\"disable_web_page_preview\":true,\"parse_mode\":\"HTML\"" + rep + tail + "}";
+   string resp = "";
+   int code = HttpRequest("POST", TgApi("sendMessage"), body, resp);
+   if(code == 400 && replyTo > 0)
+     {
+      //--- the message to reply to may be gone: send without the reply
+      body = "{\"chat_id\":\"" + JsonEscape(chat) + "\",\"text\":\"" + JsonEscape(text) + "\",\"disable_web_page_preview\":true,\"parse_mode\":\"HTML\"" + tail + "}";
+      code = HttpRequest("POST", TgApi("sendMessage"), body, resp);
+     }
+   if(code == 400)
+     {
+      //--- formatting rejected: the same text without formatting, so the message is never lost
+      body = "{\"chat_id\":\"" + JsonEscape(chat) + "\",\"text\":\"" + JsonEscape(StripHtml(text)) + "\",\"disable_web_page_preview\":true" + tail + "}";
+      code = HttpRequest("POST", TgApi("sendMessage"), body, resp);
+     }
+   if(code == 200 && StringFind(resp, "\"ok\":true") >= 0)
+     {
+      int mp = StringFind(resp, "\"message_id\":");
+      int id = (mp >= 0) ? (int)StringToInteger(JsonValue(resp, "message_id", mp)) : 1;
+      return (id > 0) ? id : 1;
+     }
+   Print("[TG] send to ", ChatLabel(chat), " failed: HTTP ", code, " ", StringSubstr(resp, 0, 160));
+   return -1;
+  }
+
+bool TgSend(string chat, string text) { return (TgSendEx(chat, text, "", 0) > 0); }
+
+//--- message ids and "sent" marks per (key, chat) - kept in global variables, so a restart never re-sends
+string MsgSentGV(string key, string chat) { return (TgPreviewOn() ? "AK10QM_" : "AK10M_") + ShortHash(key + "|" + chat); }
+string MsgIdGV(string key, string chat) { return (TgPreviewOn() ? "AK10QI_" : "AK10I_") + ShortHash(key + "|" + chat); }
+int    MsgId(string key, string chat) { return (int)GVGet(MsgIdGV(key, chat), 0); }
+
+//--- each message only once per chat; returns the message id (the old one if it was sent before), -1 = not sent
+int SendOnceId(string key, string chat, string text, string markup, int replyTo)
+  {
+   if(StringLen(chat) == 0) return -1;
+   string gv = MsgSentGV(key, chat);
+   if(GlobalVariableCheck(gv)) { int old = MsgId(key, chat); return (old > 0) ? old : 1; }
+   if(!g_tg && !TgPreviewOn()) return -1;
+   int id = TgSendEx(chat, text, markup, replyTo);
+   if(id > 0)
+     {
+      GlobalVariableSet(gv, (double)TimeCurrent());
+      GlobalVariableSet(MsgIdGV(key, chat), (double)id);
+      if(chat == PublicChannelId) GVSet(TgGV("LASTPUB"), (double)TimeLocal());
+     }
+   return id;
+  }
+bool SendOnce(string key, string chat, string text) { return (SendOnceId(key, chat, text, "", 0) > 0); }
+
+//--- shared names of the Telegram content manager (all charts of the terminal)
+string TgGV(string f) { return (TgPreviewOn() ? "AK10QT_" : "AK10T_") + f; }
+void   TgInc(string f) { GVSet(TgGV(f), GVGet(TgGV(f), 0) + 1); }
+
+//--- inline buttons
+string BtnUrl(string text, string url) { return "{\"text\":\"" + JsonEscape(text) + "\",\"url\":\"" + JsonEscape(url) + "\"}"; }
+string VipPrice() { return ShortToString((ushort)0x20B9) + VipPriceAmount; }
+string VipButtons()
+  {
+   string rows = "";
+   if(StringLen(VipLink) > 10) rows += "[" + BtnUrl(Emo(0x1F48E) + " JOIN VIP - " + VipPrice(), VipLink) + "]";
+   if(StringLen(AdminLink) > 10) rows += ((rows != "") ? "," : "") + "[" + BtnUrl(Emo(0x1F4AC) + " Message Admin", AdminLink) + "]";
+   if(rows == "") return "";
+   return "{\"inline_keyboard\":[" + rows + "]}";
+  }
+
+//--- the trade's own entry message in this chat (updates and the exit reply to it)
+string OpenKey(long key) { return "OPEN_" + _Symbol + "_" + IntegerToString(key); }
+
+//--- one trade event to admin / VIP / public: each chat gets its own text; replies go under the trade's entry message
+void Broadcast3(string key, string adminText, string vipText, string pubText, bool vip, bool pub, long tradeKey)
+  {
+   if(IsTesting() && !TgPreviewOn()) return;
+   if(!g_tg && !TgPreviewOn()) return;
+   string ok = (tradeKey > 0) ? OpenKey(tradeKey) : "";
+   SendOnceId(key, AdminChatId, adminText, "", (ok != "") ? MsgId(ok, AdminChatId) : 0);
+   if(vip && vipText != "" && SendOnceId(key, VipChannelId, vipText, "", (ok != "") ? MsgId(ok, VipChannelId) : 0) > 0 && tradeKey > 0) PSet(tradeKey, "LUP", (double)TimeCurrent());
+   if(pub && pubText != "") SendOnceId(key, PublicChannelId, pubText, VipButtons(), (ok != "") ? MsgId(ok, PublicChannelId) : 0);
+  }
+
+//--- photos (multipart upload)
+void AppendStr(char &arr[], string str)
+  {
+   char tmp[];
+   int n = StringToCharArray(str, tmp, 0, WHOLE_ARRAY, CP_UTF8);
+   if(n <= 1) return;
+   int off = ArraySize(arr);
+   ArrayResize(arr, off + n - 1);
+   for(int i = 0; i < n - 1; i++) arr[off + i] = tmp[i];
+  }
+
+int TgSendPhotoEx(string chat, string file, string caption, string markup, int replyTo)
+  {
+   if(StringLen(chat) == 0) return -1;
+   if(TgPreviewOn()) return TgPreview(chat, "PHOTO " + file, caption, markup, replyTo);
+   if(!g_tg || g_tgUrlErr) return -1;
+   int h = FileOpen(file, FILE_READ | FILE_BIN);
+   if(h == INVALID_HANDLE) return -1;
+   int sz = (int)FileSize(h);
+   uchar img[];
+   ArrayResize(img, sz);
+   uint got = FileReadArray(h, img, 0, sz);
+   FileClose(h);
+   if(sz <= 0 || (int)got != sz) return -1;
+   string bd = "----AKTG" + IntegerToString((int)GetTickCount());
+   char data[];
+   ArrayResize(data, 0);
+   AppendStr(data, "--" + bd + "\r\nContent-Disposition: form-data; name=\"chat_id\"\r\n\r\n" + chat + "\r\n");
+   AppendStr(data, "--" + bd + "\r\nContent-Disposition: form-data; name=\"caption\"\r\n\r\n" + caption + "\r\n");
+   AppendStr(data, "--" + bd + "\r\nContent-Disposition: form-data; name=\"parse_mode\"\r\n\r\nHTML\r\n");
+   if(StringLen(markup) > 0) AppendStr(data, "--" + bd + "\r\nContent-Disposition: form-data; name=\"reply_markup\"\r\n\r\n" + markup + "\r\n");
+   if(replyTo > 0) AppendStr(data, "--" + bd + "\r\nContent-Disposition: form-data; name=\"reply_parameters\"\r\n\r\n{\"message_id\":" + IntegerToString(replyTo) + ",\"allow_sending_without_reply\":true}\r\n");
+   AppendStr(data, "--" + bd + "\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"chart.png\"\r\nContent-Type: image/png\r\n\r\n");
+   int off = ArraySize(data);
+   ArrayResize(data, off + sz);
+   for(int i = 0; i < sz; i++) data[off + i] = (char)img[i];
+   AppendStr(data, "\r\n--" + bd + "--\r\n");
+   char res[];
+   string rh = "";
+   string headers = "Content-Type: multipart/form-data; boundary=" + bd + "\r\n";
+   ResetLastError();
+   int code = WebRequest("POST", TgApi("sendPhoto"), headers, 20000, data, res, rh);
+   string resp = CharArrayToString(res, 0, WHOLE_ARRAY, CP_UTF8);
+   if(code == 200)
+     {
+      int mp = StringFind(resp, "\"message_id\":");
+      int id = (mp >= 0) ? (int)StringToInteger(JsonValue(resp, "message_id", mp)) : 1;
+      return (id > 0) ? id : 1;
+     }
+   Print("[TG] sendPhoto to ", ChatLabel(chat), " failed: HTTP ", code, " ", StringSubstr(resp, 0, 200));
+   return -1;
+  }
+
+void TgSticker(string chat, string fileId, string key)
+  {
+   if(StringLen(fileId) < 5 || StringLen(chat) == 0) return;
+   if(TgPreviewOn()) { TgPreview(chat, "STICKER", fileId, "", 0); return; }
+   if(!g_tg || g_tgUrlErr) return;
+   string gv = MsgSentGV(key, chat);
+   if(GlobalVariableCheck(gv)) return;
+   string body = "{\"chat_id\":\"" + JsonEscape(chat) + "\",\"sticker\":\"" + JsonEscape(fileId) + "\"}";
+   string resp = "";
+   int code = HttpRequest("POST", TgApi("sendSticker"), body, resp);
+   if(code == 200 && StringFind(resp, "\"ok\":true") >= 0) GlobalVariableSet(gv, (double)TimeCurrent());
+  }
+
+bool TgPoll(string chat, string question, string o1, string o2, string o3)
+  {
+   if(TgPreviewOn()) { TgPreview(chat, "POLL", question + "\r\n  - " + o1 + "\r\n  - " + o2 + ((o3 != "") ? "\r\n  - " + o3 : ""), "", 0); return true; }
+   if(!g_tg || g_tgUrlErr) return false;
+   string opts = "[{\"text\":\"" + JsonEscape(o1) + "\"},{\"text\":\"" + JsonEscape(o2) + "\"}" + ((o3 != "") ? ",{\"text\":\"" + JsonEscape(o3) + "\"}" : "") + "]";
+   string body = "{\"chat_id\":\"" + JsonEscape(chat) + "\",\"question\":\"" + JsonEscape(question) + "\",\"options\":" + opts + ",\"is_anonymous\":true}";
+   string resp = "";
+   int code = HttpRequest("POST", TgApi("sendPoll"), body, resp);
+   if(code == 200 && StringFind(resp, "\"ok\":true") >= 0) return true;
+   string opts2 = "[\"" + JsonEscape(o1) + "\",\"" + JsonEscape(o2) + "\"" + ((o3 != "") ? ",\"" + JsonEscape(o3) + "\"" : "") + "]";
+   body = "{\"chat_id\":\"" + JsonEscape(chat) + "\",\"question\":\"" + JsonEscape(question) + "\",\"options\":" + opts2 + ",\"is_anonymous\":true}";
+   code = HttpRequest("POST", TgApi("sendPoll"), body, resp);
+   return (code == 200 && StringFind(resp, "\"ok\":true") >= 0);
+  }
+//==================================================================
+// TRADE CARDS (v10.3): admin = full technical details; VIP / public = trader-style posts with emojis.
+// The channels never see robot words (no EA name, no method / layer / memory / tier).
+//==================================================================
+string SymNice(string s)
+  {
+   int c = ClassifySymbol(s);
+   if(c == SC_GOLD) return "GOLD";
+   if(c == SC_BTC) return "BITCOIN";
+   if(c == SC_ETH) return "ETHEREUM";
+   if(c == SC_OIL) return "OIL";
+   string u = s;
+   StringToUpper(u);
+   if(StringFind(u, "EURUSD") >= 0) return "EUR/USD";
+   return u;
+  }
+
+string SymEmoji(string s)
+  {
+   int c = ClassifySymbol(s);
+   if(c == SC_GOLD) return Emo(0x1F947);
+   if(c == SC_BTC) return ShortToString((ushort)0x20BF);
+   if(c == SC_ETH) return Emo(0x1F537);
+   if(c == SC_OIL) return Emo(0x1F6E2);
+   return Emo(0x1F4B6);
+  }
+
+string HashTag(string s)
+  {
+   string t = "";
+   int n = StringLen(s);
+   for(int i = 0; i < n; i++)
+     {
+      ushort ch = StringGetCharacter(s, i);
+      if((ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) t += ShortToString(ch);
+     }
+   return "#" + t;
+  }
+
+string TrendArrow(int t) { return (t > 0) ? ShortToString((ushort)0x25B2) : ((t < 0) ? ShortToString((ushort)0x25BC) : ShortToString((ushort)0x25CF)); }
+string Bar(int filled, int total) { return RepeatCh(0x25B0, filled) + RepeatCh(0x25B1, total - filled); }
+string ArrowR() { return ShortToString((ushort)0x279C); }
+string SideDot(int dir) { return Emo((dir > 0) ? 0x1F7E2 : 0x1F534); }
+string Sig() { return (StringLen(BrandTag) > 0) ? "\n<i>" + ShortToString((ushort)0x2014) + " " + HtmlEsc(BrandTag) + "</i>" : ""; }
+string RiskNote() { return ShowRiskNote ? "\n" + Emo(0x26A0) + " <i>Always use a stop loss and a sensible lot size.</i>" : ""; }
+string VipLine() { return (StringLen(VipLink) > 10) ? "\n" + Emo(0x1F48E) + " <b>VIP gets every trade with full live management - " + VipPrice() + "</b>" : ""; }
+string Rx(double r) { return ((r >= 0) ? "+" : "") + DoubleToString(r, 1) + "R"; }
+
+//--- trend alignment of the trade: how many of D1 / H4 / H1 point its way
+int AlignCount(int dir) { return ((TrendOf(PERIOD_D1) == dir) ? 1 : 0) + ((TrendOf(PERIOD_H4) == dir) ? 1 : 0) + ((TrendOf(PERIOD_H1) == dir) ? 1 : 0); }
+string TrendLine(int dir)
+  {
+   int a = AlignCount(dir);
+   return Emo(0x1F9ED) + " Trend  D1 " + TrendArrow(TrendOf(PERIOD_D1)) + "  H4 " + TrendArrow(TrendOf(PERIOD_H4)) + "  H1 " + TrendArrow(TrendOf(PERIOD_H1)) + "   <b>" + IntegerToString(a) + "/3</b> " + Bar(a, 3);
+  }
+
+//--- a setup alert for this symbol + side that came shortly before the entry (its message ids: the entry replies to it)
+string WatchGV(int dir) { return (TgPreviewOn() ? "AK10QW_" : "AK10W_") + _Symbol + "_" + IntegerToString(dir); }
+string WatchKey(int dir) { return "WATCH_" + _Symbol + "_" + IntegerToString(dir) + "_" + IntegerToString((long)GVGet(WatchGV(dir), 0)); }
+bool   WatchFresh(int dir) { datetime t = (datetime)GVGet(WatchGV(dir), 0); return (t > 0 && TimeCurrent() - t <= 4 * 3600); }
+
+//--- the entry post for the channels: VIP = full plan; public = entry + stop, targets / management stay VIP (unless PublicShowsTargets)
+string ChannelOpenCard(int dir, double en, double sl, double t1, double tFinal, string setup, int tf, string idea, string plan, bool pub, bool fromWatch)
+  {
+   string head = fromWatch ? Emo(0x1F525) + " <b>SETUP CONFIRMED - LIVE NOW</b> " + Emo(0x1F525) : Emo(0x1F680) + " <b>NEW SIGNAL</b> " + Emo(0x1F680);
+   string t = head + "\n" + Divider() +
+              "\n" + SideDot(dir) + " <b>" + SideName(dir) + " " + SymNice(_Symbol) + "</b> " + SymEmoji(_Symbol) + "  " + HashTag(_Symbol) + "\n" + Divider() +
+              "\n" + Emo(0x1F4B5) + " Entry  <code>" + Px(en) + "</code>" +
+              "\n" + Emo(0x1F6D1) + " Stop Loss  <code>" + Px(sl) + "</code>";
+   bool showT = (!pub || PublicShowsTargets);
+   string lockTxt = Emo(0x1F512) + " VIP";
+   if(t1 > 0) t += "\n" + Emo(0x1F3AF) + " Target 1  " + (showT ? "<code>" + Px(t1) + "</code>  <i>(book half + risk-free)</i>" : "<tg-spoiler>" + lockTxt + "</tg-spoiler>");
+   if(tFinal > 0) t += "\n" + Emo(0x1F3C1) + " Final target  " + (showT ? "<code>" + Px(tFinal) + "</code>" : "<tg-spoiler>" + lockTxt + "</tg-spoiler>");
+   else t += "\n" + Emo(0x1F3C1) + " Final target  " + (showT ? "<i>trailing - we ride the trend</i>" : "<tg-spoiler>" + lockTxt + "</tg-spoiler>");
+   t += "\n" + Divider() +
+        "\n" + TrendLine(dir) +
+        "\n" + Emo(0x1F9E9) + " Setup  <b>" + HtmlEsc(setup) + "</b> " + ShortToString((ushort)0x2022) + " " + ProTf(tf);
+   if(!pub) t += "\n<blockquote expandable>" + Emo(0x1F9E0) + " <b>Why this trade</b>\n" + HtmlEsc(idea) + "\n\n" + Emo(0x1F4B0) + " " + HtmlEsc(plan) + "</blockquote>" +
+                 "\n" + Emo(0x1F514) + " <i>Live updates follow right here.</i>";
+   else t += "\n" + Emo(0x1F48E) + " <i>VIP also gets the targets and every live move: partial profit, risk-free stop, trailing.</i>";
+   t += RiskNote() + Sig();
+   return t;
+  }
+
+//--- admin plan text (technical)
+string AdminPlanText(int ex, double lots, int xs, double xt)
+  {
+   double pl = PartialLots(lots);
+   if(ex == EX_QUICK) return "Plan: QUICK 2R (wild market) - stop to entry at +" + DoubleToString(QuickNoLossR, 1) + "R, target +" + DoubleToString(QuickTargetR, 1) + "R on the order, max " + IntegerToString(QuickMaxHours) + " market hours.";
+   if(xs == 1) return "Plan: STEP LOCK - stop to entry at +1R, then +1R at 2R, +2R at 3R ... (no partial)" + ((ex == EX_TX) ? "; max 96 candles." : (H4FlipExit ? "; H4 flip closes; max " + IntegerToString(MaxHoldDays) + " market days." : "."));
+   if(xs == 2) return "Plan: FULL TARGET +" + DoubleToString(xt, 1) + "R or the stop" + ((ex == EX_TX) ? "; max 96 candles." : ".");
+   string first = (pl > 0) ? "at +" + DoubleToString(PartialAtR, 1) + "R book " + DoubleToString(pl, 2) + " of " + DoubleToString(lots, 2) + " lot and move the stop to entry"
+                  : "at +" + DoubleToString(NoLossNow(), 1) + "R the stop moves to entry (lot too small to split)";
+   return "Plan: " + first + ((TrailStartNow() > 0) ? "; from +" + DoubleToString(TrailStartNow(), 1) + "R the stop trails " + DoubleToString(TrailBehindNow(), 1) + "R behind the best price" : "") +
+          ((ex == EX_TX) ? "; max 96 candles." : (H4FlipExit ? "; H4 flip closes; max " + IntegerToString(MaxHoldDays) + " market days." : "."));
+  }
+
+string ProPlanText(int ex, double lots, double tpx, int xs, double xt, double en, double R, int dir)
+  {
+   if(xs == 2) return "One clean target at " + Px(en + dir * xt * R) + " - the stop protects the downside.";
+   if(xs == 1) return "As soon as price moves our way the stop goes to entry (risk-free), then profit is locked step by step as the move grows.";
+   string t = (PartialLots(lots) > 0) ? "Half of the position is booked at the first target and the stop moves to entry - the trade becomes risk-free."
+              : "At the first target the stop moves to entry, so the trade becomes risk-free.";
+   if(ex == EX_QUICK) return t + " The final target is " + Px(tpx) + ".";
+   return t + " The rest follows the trend with a trailing stop.";
+  }
+
+string HistAdminText(int hk)
+  {
+   if(HistoryMode == HIST_OFF || hk < 0) return "";
+   string past = HistLastList(hk, HistoryShowLast);
+   return "\n" + Emo(0x1F4DA) + " History: " + HtmlEsc(HistSitText(hk)) + " - " + HtmlEsc(HistLine(hk)) + ((past != "") ? "\n   last: " + HtmlEsc(past) : "");
+  }
+
+string OpenCountText()
+  {
+   return "open on " + _Symbol + ": Pullback " + IntegerToString(CountMyOpen(M_PB)) + ", Breakout " + IntegerToString(CountMyOpen(M_BO)) + ", Memory " + IntegerToString(CountMyOpen(M_MEM)) + ", Trend " + IntegerToString(CountMyOpen(M_TR));
+  }
+
+//--- the entry message ids of a trade can also be the reply target for the setup alert that came before it
+void NotifyOpen(long key, string story)
+  {
+   int dir = (int)PGet(key, "DIR", 0);
+   int ly = (int)PGet(key, "LAY", LY_H1), fm = (int)PGet(key, "FAM", FM_TPB);
+   int exm = (int)PGet(key, "EXP", EX_TREND);
+   int m = KeyMethod(key);
+   int hk = (int)PGet(key, "HK", -1);
+   int xs = (int)PGet(key, "XS", 0);
+   double xt = PGet(key, "XT", 3.0);
+   double en = PGet(key, "EN", 0), sl = PGet(key, "SL0", 0), R = PGet(key, "R", 0), lots = PGet(key, "LOT0", 0);
+   double pl = PartialLots(lots);
+   double t1 = (xs == 0) ? en + dir * ((pl > 0) ? PartialAtR : ((exm == EX_QUICK) ? QuickNoLossR : NoLossNow())) * R : 0;
+   double tq = (exm == EX_QUICK) ? en + dir * QuickTargetR * R : ((xs == 2) ? en + dir * xt * R : 0);
+   string adm = SideDot(dir) + " <b>" + SideName(dir) + " " + HtmlEsc(_Symbol) + "</b>  |  " + MethodName(m) + " | " + HtmlEsc(SetupName(ly, fm)) + "\n" + Divider() +
+                "\n" + Emo(0x1F4CD) + " Entry: <code>" + Px(en) + "</code>" +
+                "\n" + Emo(0x1F6D1) + " Stop: <code>" + Px(sl) + "</code> (1R = " + Px(R) + ")" +
+                ((t1 > 0) ? "\n" + Emo(0x1F3AF) + " First target (+" + DoubleToString(PartialAtR, 1) + "R): <code>" + Px(t1) + "</code>" + ((pl > 0) ? " - book " + DoubleToString(pl, 2) + " lot, stop to entry" : " - stop to entry") : "") +
+                ((tq > 0) ? "\n" + Emo(0x1F3C1) + " Target: <code>" + Px(tq) + "</code>" : "") +
+                "\n" + Emo(0x1F4CA) + " Trend: D1 " + TrendWord((int)PGet(key, "TD1", 0)) + " + H4 " + TrendWord((int)PGet(key, "TH4", 0)) + " | points BUY " + IntegerToString((int)PGet(key, "PB", 0)) + " / SELL " + IntegerToString((int)PGet(key, "PS", 0)) +
+                "\n" + Emo(0x1F9ED) + " Market: " + HtmlEsc(MarketModeText()) +
+                HistAdminText(hk) +
+                "\n\n" + Emo(0x1F4DD) + " " + HtmlEsc(story) +
+                "\n\n" + Emo(0x1F4B0) + " " + HtmlEsc(AdminPlanText(exm, lots, xs, xt));
+   double riskUSD = R * ValuePerPrice(lots);
+   adm += "\n\nLots " + DoubleToString(lots, 2) + " | risk " + DoubleToString(riskUSD, 2) + " USD" +
+          ((AccountBalance() > 0) ? " (" + DoubleToString(100.0 * riskUSD / AccountBalance(), 1) + "% of balance)" : "") +
+          " | spread " + DoubleToString(PGet(key, "SPP", 0), 1) + "% of the stop | " + OpenCountText();
+   bool fw = WatchFresh(dir);
+   string wk = fw ? WatchKey(dir) : "";
+   if(fw)
+     {
+      //--- whoever saw the "setup loading" alert also gets the confirmation (and the rest of this trade's story)
+      if(SendToPublic && MsgId(wk, PublicChannelId) > 0) PSet(key, "PUB", 1);
+      if(SendToVip && MsgId(wk, VipChannelId) > 0) PSet(key, "VIP", 1);
+     }
+   string setup = ProSetupTitle(ly, fm, dir), idea = ProIdea(ly, fm, dir), plan = ProPlanText(exm, lots, tq, xs, xt, en, R, dir);
+   string ok = OpenKey(key);
+   if(IsTesting() && !TgPreviewOn()) return;
+   SendOnceId(ok, AdminChatId, adm, "", 0);
+   if(PGet(key, "VIP", 0) > 0)
+     {
+      TgSticker(VipChannelId, (dir > 0) ? StickerBuy : StickerSell, ok + "_S");
+      SendOnceId(ok, VipChannelId, ChannelOpenCard(dir, en, sl, t1, tq, setup, LayerTf(ly), idea, plan, false, fw), "", fw ? MsgId(wk, VipChannelId) : 0);
+     }
+   if(PGet(key, "PUB", 0) > 0)
+      SendOnceId(ok, PublicChannelId, ChannelOpenCard(dir, en, sl, t1, tq, setup, LayerTf(ly), idea, plan, true, fw), VipButtons(), fw ? MsgId(wk, PublicChannelId) : 0);
+   if(fw) GlobalVariableDel(WatchGV(dir));                             // one alert = one confirmation (the next trade is a new signal)
+   TryOpenPhoto(key);
+  }
+
+//--- first target reached: part booked, stop of the rest to entry
+void NotifyPartial(long key, int dir, double plots, double px, double pl)
+  {
+   double en = PGet(key, "EN", 0), lot0 = PGet(key, "LOT0", 0), R = PGet(key, "R", 0);
+   int m = KeyMethod(key);
+   string adm = Emo(0x2705) + " <b>FIRST TARGET - " + HtmlEsc(_Symbol) + " " + SideName(dir) + "</b>  |  " + MethodName(m) + "\n" + Divider() +
+                "\nBooked " + DoubleToString(plots, 2) + " of " + DoubleToString(lot0, 2) + " lot @ <code>" + Px(px) + "</code> (" + Usd(pl) + " USD, +" + DoubleToString(PartialAtR, 1) + "R)." +
+                "\nStop of the rest moved to entry - the trade cannot lose any more.";
+   string vip = Emo(0x2705) + " <b>TARGET 1 HIT</b> " + Emo(0x1F4B0) + "  " + HashTag(_Symbol) + " " + SideName(dir) + "\n" + Divider() +
+                "\nHalf booked at <code>" + Px(px) + "</code>  (" + MoveText(dir * (px - en)) + ")" +
+                "\n" + Emo(0x1F6E1) + " Stop loss moved to entry " + ArrowR() + " <b>risk-free trade</b> " + Emo(0x1F60E) +
+                "\n" + Emo(0x1F4C8) + " The rest keeps riding the trend.";
+   string pub = Emo(0x2705) + " <b>TARGET 1 HIT</b>  " + HashTag(_Symbol) + " " + SideName(dir) + "  (" + MoveText(dir * (px - en)) + ")\n" + Divider() +
+                "\n" + Emo(0x1F48E) + " VIP booked half the profit and the trade is now <b>risk-free</b> " + Emo(0x1F512) + VipLine();
+   Broadcast3("PART_" + _Symbol + "_" + IntegerToString(key), adm, vip, pub, PGet(key, "VIP", 0) > 0, PGet(key, "PUB", 0) > 0, key);
+  }
+
+//--- stop updates: 1 = moved to entry, 2 = tightened (momentum turned), 3 = trailing started, 4 = profit locked (step lock), level = +R locked
+void NotifyUpdate(long key, int dir, int kind, double level)
+  {
+   int m = KeyMethod(key);
+   double en = PGet(key, "EN", 0), R = PGet(key, "R", 0);
+   double lockR = (R > 0) ? dir * (level - en) / R : 0;
+   string what = (kind == 1) ? "stop moved to entry (+" + DoubleToString(NoLossNow(), 1) + "R reached)" :
+                 ((kind == 2) ? "trend points turned (BUY " + IntegerToString(g_ptsB) + " / SELL " + IntegerToString(g_ptsS) + ") - stop tightened behind the last H1 candle" :
+                  ((kind == 3) ? "trailing stop started (" + DoubleToString(TrailBehindNow(), 1) + "R behind the best price)" : "step lock: stop at " + Rx(lockR)));
+   string adm = Emo(0x1F6E1) + " <b>UPDATE - " + HtmlEsc(_Symbol) + " " + SideName(dir) + "</b>  |  " + MethodName(m) + "\n" + Divider() +
+                "\n" + HtmlEsc(what) + "\nStop: <code>" + Px(level) + "</code>";
+   string line = (kind == 1) ? Emo(0x1F6E1) + " <b>RISK-FREE NOW</b>  " + HashTag(_Symbol) + " " + SideName(dir) + "\n" + Divider() + "\nStop loss moved to entry - this trade can no longer lose " + Emo(0x2705) :
+                 ((kind == 2) ? Emo(0x26A0) + " <b>STOP TIGHTENED</b>  " + HashTag(_Symbol) + " " + SideName(dir) + "\n" + Divider() + "\nMomentum is fading, so we protect the position with a tighter stop." :
+                  ((kind == 3) ? Emo(0x1F525) + " <b>TRAILING STOP ON</b>  " + HashTag(_Symbol) + " " + SideName(dir) + "\n" + Divider() + "\nPrice keeps running our way - the stop now follows and locks in profit " + Emo(0x1F4C8) :
+                   Emo(0x1F512) + " <b>PROFIT LOCKED</b>  " + HashTag(_Symbol) + " " + SideName(dir) + "\n" + Divider() + "\nThe stop is now in profit (" + Rx(lockR) + " locked) - let it run " + Emo(0x1F680)));
+   string vip = line + "\n\n" + Emo(0x1F6D1) + " New stop loss: <code>" + Px(level) + "</code>";
+   Broadcast3("UPD" + IntegerToString(kind) + "_" + _Symbol + "_" + IntegerToString(key) + "_" + IntegerToString((int)PGet(key, "PTT", 0)) + "_" + DoubleToString(lockR, 0), adm, vip, "", PGet(key, "VIP", 0) > 0, false, key);
+  }
+
+//--- progress milestones (+2R, +4R ...): admin and VIP (hype)
+void NotifyTier(long key, int dir, int tier)
+  {
+   int tk = TicketOfKey(key);
+   double pl = 0, sl = 0, en = PGet(key, "EN", 0);
+   if(tk > 0 && OrderSelect(tk, SELECT_BY_TICKET)) { pl = OrderProfit() + OrderSwap() + OrderCommission(); sl = OrderStopLoss(); }
+   bool locked = (sl > 0 && dir * (sl - en) >= 0);
+   string stopTxt = locked ? ((PGet(key, "TRL", 0) > 0) ? "trailing, " + Px(sl) + " (profit locked)" : "at entry " + Px(sl) + " (cannot lose)") : "original " + Px(sl);
+   string adm = Emo(0x1F680) + " <b>+" + DoubleToString(TierR(tier), 0) + "R - " + HtmlEsc(_Symbol) + " " + SideName(dir) + "</b>  |  " + MethodName(KeyMethod(key)) + "\n" + Divider() +
+                "\nBest profit reached +" + DoubleToString(TierR(tier), 0) + "R (" + Usd(pl) + " USD open now).\nStop: " + stopTxt;
+   string vip = Emo(0x1F680) + " <b>RUNNING +" + DoubleToString(TierR(tier), 0) + "R</b> " + Emo(0x1F525) + "  " + HashTag(_Symbol) + " " + SideName(dir) + "\n" + Divider() +
+                "\nThis trade has already moved " + DoubleToString(TierR(tier), 0) + "x its risk in our favour." + (locked ? "\n" + Emo(0x1F512) + " Stop is protecting the profit." : "");
+   //--- hype only: not when the VIP channel already got an update of this trade in the last 15 minutes (no message bursts)
+   bool vipOn = (PGet(key, "VIP", 0) > 0 && tier >= 2 && TimeCurrent() - (datetime)PGet(key, "LUP", 0) >= 900);
+   Broadcast3("TIER_" + _Symbol + "_" + IntegerToString(key) + "_" + IntegerToString(tier), adm, vip, "", vipOn, false, key);
+  }
+
+void NotifyClose(long key, int dir, double en, double cp, double profit, double resR, int cr, int tmax, double hours)
+  {
+   int ly = (int)PGet(key, "LAY", LY_H1), fm = (int)PGet(key, "FAM", FM_TPB);
+   int m = KeyMethod(key);
+   bool prt = ((int)PGet(key, "PRT", 0) == 1);
+   string adm = Emo((profit >= 0) ? 0x2705 : 0x274C) + " <b>CLOSED - " + HtmlEsc(_Symbol) + " " + SideName(dir) + "</b>  |  " + MethodName(m) + " | " + HtmlEsc(SetupName(ly, fm)) + "\n" + Divider() +
+                "\n" + Emo(0x1F4CD) + " Entry: <code>" + Px(en) + "</code>" +
+                "\n" + Emo(0x1F3C1) + " Exit: <code>" + Px(cp) + "</code>" +
+                (prt ? "\n" + Emo(0x2705) + " First target booked: " + DoubleToString(PGet(key, "PRTLOT", 0), 2) + " lot @ <code>" + Px(PGet(key, "PRTPX", 0)) + "</code> (" + Usd(PGet(key, "PRTPL", 0)) + " USD)" : "") +
+                "\n" + Emo(0x1F4B5) + " Result: <b>" + Usd(profit) + " USD (" + Rtx(resR) + ")</b>" +
+                ((tmax >= 1) ? "\n" + Emo(0x1F3C6) + " Best: +" + DoubleToString(TierR(tmax), 0) + "R or more" : "") +
+                "\n" + Emo(0x23F1) + " Held: " + DoubleToString(hours, 1) + " hours" +
+                "\n" + Emo(0x1F4DD) + " " + HtmlEsc(CloseTextL(cr, ly)) +
+                "\n\nBalance: " + DoubleToString(AccountBalance(), 2) + " " + AccountCurrency();
+   string mv = MoveText(dir * (cp - en));
+   string ch;
+   if(resR > 0.05)
+      ch = Emo(0x1F389) + " <b>CLOSED IN PROFIT</b> " + Emo(0x1F4B0) + "  " + HashTag(_Symbol) + " " + SideName(dir) + "\n" + Divider() +
+           "\n" + Emo(0x1F4B5) + " <code>" + Px(en) + "</code> " + ArrowR() + " <code>" + Px(cp) + "</code>" +
+           (prt ? "\n" + Emo(0x2705) + " Half booked earlier at <code>" + Px(PGet(key, "PRTPX", 0)) + "</code>" : "") +
+           "\n" + Emo(0x1F4C8) + " <b>" + mv + "</b>  " + ShortToString((ushort)0x2022) + "  <b>" + DoubleToString(resR, 1) + "x the risk</b>" +
+           "\n" + Emo(0x1F3C1) + " " + ProCloseReason(cr);
+   else if(resR >= -0.05)
+      ch = Emo(0x1F6E1) + " <b>CLOSED AT ENTRY - NO LOSS</b>  " + HashTag(_Symbol) + " " + SideName(dir) + "\n" + Divider() +
+           "\n" + Emo(0x1F4B5) + " <code>" + Px(en) + "</code> " + ArrowR() + " <code>" + Px(cp) + "</code>" +
+           (prt ? "\n" + Emo(0x2705) + " Half was booked in profit before " + Emo(0x1F4B0) : "") +
+           "\n" + Emo(0x1F4DD) + " " + ProCloseReason(cr) + "\n<i>Capital protected - on to the next one.</i>";
+   else
+      ch = Emo(0x1F6D1) + " <b>" + ((cr == CR_SL) ? "STOP LOSS HIT" : "CLOSED EARLY - SMALL LOSS") + "</b>  " + HashTag(_Symbol) + " " + SideName(dir) + "\n" + Divider() +
+           "\n" + Emo(0x1F4B5) + " <code>" + Px(en) + "</code> " + ArrowR() + " <code>" + Px(cp) + "</code>  (" + mv + ")" +
+           "\n" + Emo(0x1F4DD) + " " + ProCloseReason(cr) +
+           "\n<i>Losses are part of the game - the stop kept this one small.</i> " + Emo(0x1F4AA);
+   string pubTxt = ch + ((resR > 0.05) ? "\n" + Divider() + "\n" + Emo(0x1F48E) + " VIP had it live from the first second." + VipLine() : "");
+   if(resR > 0.05) TgSticker(VipChannelId, StickerWin, "CLOSE_" + _Symbol + "_" + IntegerToString(key) + "_S");
+   else if(resR < -0.05) TgSticker(VipChannelId, StickerLoss, "CLOSE_" + _Symbol + "_" + IntegerToString(key) + "_S");
+   Broadcast3("CLOSE_" + _Symbol + "_" + IntegerToString(key), adm, ch + Sig(), pubTxt + Sig(), PGet(key, "VIP", 0) > 0, PGet(key, "PUB", 0) > 0, key);
+  }
+
+//==================================================================
+// SETUP ALERTS ("setup loading") - price is at a level where one of the entries can confirm soon. Honest wording: watching,
+// not a trade. Max SetupAlertsPerDay in the public channel (VIP up to twice that), once per symbol + side + kind every 4 hours.
+// When the entry comes within 4 hours, the entry post is a reply to this alert ("SETUP CONFIRMED").
+//==================================================================
+datetime g_swBar = 0;
+string   g_swTxt = "";                     // what the watcher sees now (panel)
+
+//--- an alert only when the entry could really be taken now: the same gates as the entry itself (no side effects)
+bool AlertGatesOK(int m, int ly, int d)
+  {
+   int tf = LayerTf(ly);
+   int ex = EX_TREND;
+   string w = "";
+   if(!MarketPlan(d, ly, ex, w)) return false;
+   if(!InSession()) return false;
+   if(StackOnlyAfterBE && MethodTfAtRisk(m, tf)) return false;
+   double atr = 0;
+   double S = StopDistance(tf, d, atr);
+   if(S <= 0) return false;
+   double lots = TradeLots(S);
+   if(m == M_PB && g_cls == SC_GOLD && GoldPullbackMode == GM_SMALL) lots = NormLot(lots * 0.5);
+   if(StudyFilter(d, S, w)) return false;
+   RefreshRates();
+   if(UseSpreadFilter && MaxSpreadPctSL > 0 && (Ask - Bid) > MaxSpreadPctSL / 100.0 * S) return false;
+   bool quiet = false;
+   if(!EntryGates(S, lots, w, quiet, m)) return false;
+   string tb = "";
+   if(TimeBlock(tb)) return false;
+   return true;
+  }
+
+void SetupWatchTick()
+  {
+   datetime b = iTime(_Symbol, PERIOD_M1, 0);
+   if(b == g_swBar) return;
+   g_swBar = b;
+   g_swTxt = "";
+   if(!SymbolSupported() || SymbolPaused()) return;
+   int ts = TrendSide();
+   double a1 = ATR(PERIOD_H1, 1);
+   if(a1 <= 0 || iBars(_Symbol, PERIOD_H1) < 120) return;
+   RefreshRates();
+   double px = Bid;
+   int kind = 0, dir = 0;
+   double lvl = 0;
+   string need = "";
+   int lv = (SetupAlertLevel < 1) ? 1 : ((SetupAlertLevel > 3) ? 3 : SetupAlertLevel);
+   double o1 = iOpen(_Symbol, PERIOD_H1, 0);
+   bool withCandle = (ts != 0 && ts * (px - o1) > 0);                  // the running H1 candle already moves with the trend
+   //--- 1. breakout watch: D1 + H4 + H1 agree, price close to the H1 20-candle high / low (level 1: 0.25 ATR, 2: 0.2 ATR and
+   //---    moving towards it, 3: 0.1 ATR) and the entry could really be taken now
+   if(ts != 0 && UseBreakout && BreakoutH1 && V10Here() && TfAgrees(PERIOD_H1, ts) && TfAgrees(PERIOD_H4, ts))
+     {
+      int k = (ts > 0) ? iHighest(_Symbol, PERIOD_H1, MODE_HIGH, 20, 1) : iLowest(_Symbol, PERIOD_H1, MODE_LOW, 20, 1);
+      if(k >= 0)
+        {
+         double L = (ts > 0) ? Hi(PERIOD_H1, k) : Lo(PERIOD_H1, k);
+         double dist = ts * (L - px);
+         double maxD = (lv == 1) ? 0.25 : ((lv == 2) ? 0.2 : 0.1);
+         if(dist >= 0 && dist <= maxD * a1 && (lv == 1 || withCandle) &&
+            (AlertGatesOK(M_BO, LY_H1X, ts) || (BreakoutM15 && AlertGatesOK(M_BO, LY_M15X, ts))))
+           { kind = 1; dir = ts; lvl = L; need = "a strong 1-hour close " + ((ts > 0) ? "above" : "below") + " this level"; }
+        }
+     }
+   //--- 2. pull-back watch: H1 trend, price back in the EMA20 zone (level 2: and turning back with the trend; level 3: and
+   //---    already past the last candle's high / low) and the entry could really be taken now
+   if(kind == 0 && ts != 0 && UsePullback && PullbackH1 && V10Here() && !(g_cls == SC_GOLD && GoldPullbackMode == GM_OFF))
+     {
+      double e20 = EMAv(PERIOD_H1, 20, 0), e50 = EMAv(PERIOD_H1, 50, 0);
+      bool trendH1 = (ts > 0) ? (e20 > e50) : (e20 < e50);
+      bool zone = (MathAbs(px - e20) <= 0.15 * a1);
+      if(lv >= 2) zone = zone || ((ts > 0) ? (Lo(PERIOD_H1, 1) <= EMAv(PERIOD_H1, 20, 1) + 0.15 * a1) : (Hi(PERIOD_H1, 1) >= EMAv(PERIOD_H1, 20, 1) - 0.15 * a1));
+      bool turn = (lv == 1) || (withCandle && ts * (px - e20) > 0 && (lv == 2 || ts * (px - ((ts > 0) ? Hi(PERIOD_H1, 1) : Lo(PERIOD_H1, 1))) > 0));
+      if(trendH1 && zone && turn && ts * (px - e50) > 0 &&
+         (AlertGatesOK(M_PB, LY_H1, ts) || (PullbackM15 && AlertGatesOK(M_PB, LY_M15, ts))))
+        { kind = 2; dir = ts; lvl = e20; need = "a strong 1-hour candle back " + ((ts > 0) ? "up" : "down") + " from this zone"; }
+     }
+   //--- (no alert for the ETH range entries: in the test only 2% of those alerts became a trade)
+   if(kind == 0) return;
+   string what = (kind == 1) ? ((dir > 0) ? "breakout above " : "breakdown below ") : "pull-back into the trend zone near ";
+   string iks = (TgPreviewOn() ? "AK10QIK_" : "AK10IK_") + _Symbol + "_" + IntegerToString(dir) + "_" + IntegerToString(kind);
+   if(TimeCurrent() - (datetime)GVGet(iks, 0) >= 4 * 3600) { GVSet(iks, (double)TimeCurrent()); InstaSetup(dir, what, lvl, need); }
+   g_swTxt = SideName(dir) + " " + ((kind == 1) ? ((dir > 0) ? "breakout above " : "breakdown below ") : "pull-back zone ") + Px(lvl);   // panel (short)
+   if(!SendSetupAlerts || (!g_tg && !TgPreviewOn())) return;
+   //--- limits: once per symbol + side + kind every 4 hours; daily caps; never right after another post
+   string sk = (TgPreviewOn() ? "AK10QK_" : "AK10K_") + _Symbol + "_" + IntegerToString(dir) + "_" + IntegerToString(kind);
+   if(TimeCurrent() - (datetime)GVGet(sk, 0) < 4 * 3600) return;
+   if(CountMyOpen(-1) >= MaxTradesPerSymbol) return;
+   string dk = DateKey();
+   bool pubOk = SetupAlertsPublic && SendToPublic && ContentHoursNow() && GVGet(TgGV("SWP" + dk), 0) < SetupAlertsPerDay && ContentSlotFree(true);
+   bool vipOk = SendToVip && GVGet(TgGV("SWV" + dk), 0) < 2 * SetupAlertsPerDay;
+   if(!pubOk && !vipOk) return;
+   GVSet(sk, (double)TimeCurrent());
+   GVSet(WatchGV(dir), (double)TimeCurrent());
+   string wk = WatchKey(dir);
+   string head = Emo(0x1F440) + " <b>SETUP LOADING...</b>  " + HashTag(_Symbol) + "\n" + Divider() +
+                 "\n" + SideDot(dir) + " Bias: <b>" + SideName(dir) + "</b>  " + ShortToString((ushort)0x2022) + "  " + SymNice(_Symbol) + " " + SymEmoji(_Symbol) +
+                 "\n" + Emo(0x1F4CD) + " Watching: <b>" + what + "</b><code>" + Px(lvl) + "</code>" +
+                 "\n" + Emo(0x23F3) + " Needs: " + need +
+                 "\n" + TrendLine(dir) + "\n" + Divider();
+   string vip = head + "\n" + Emo(0x1F514) + " If it confirms, the full signal drops right here. No confirmation = no trade." + Sig();
+   string pub = head + "\n" + Emo(0x1F514) + " Notifications ON - the entry comes the moment it confirms." +
+                "\n" + Emo(0x1F48E) + " VIP gets the full plan instantly (stop, targets, live management)." + Sig();
+   if(vipOk && SendOnceId(wk, VipChannelId, vip, "", 0) > 0) TgInc("SWV" + dk);
+   if(pubOk && SendOnceId(wk, PublicChannelId, pub, VipButtons(), 0) > 0) { TgInc("SWP" + dk); ContentMark(); }
+   SendOnceId(wk, AdminChatId, "[setup alert] " + _Symbol + " " + SideName(dir) + " " + what + Px(lvl) + " - needs " + need, "", 0);
+  }
+
+//==================================================================
+// CHART PHOTOS (entry and exit): the panel is hidden, the boxes stay in the picture
+//==================================================================
+//--- price range of the photo: the candles it shows + every level of the open trades + up to two extra prices (entry / exit
+//--- of a trade that just closed), so the whole trade is always in the picture
+bool PhotoRange(double x1, double x2, double &hi, double &lo)
+  {
+   int tf = Period();
+   int sc = (int)ChartGetInteger(0, CHART_SCALE, 0);
+   if(sc < 0) sc = 0;
+   if(sc > 5) sc = 5;
+   double shp = ChartGetDouble(0, CHART_SHIFT_SIZE, 0);
+   if(shp < 10 || shp > 50) shp = 20;
+   int nb = (int)(ChartPhotoWidth * (1.0 - shp / 100.0)) / (1 << sc);
+   if(nb > iBars(_Symbol, tf) - 1) nb = iBars(_Symbol, tf) - 1;
+   if(nb < 10) return false;
+   int kh = iHighest(_Symbol, tf, MODE_HIGH, nb, 0), kl = iLowest(_Symbol, tf, MODE_LOW, nb, 0);
+   if(kh < 0 || kl < 0) return false;
+   hi = iHigh(_Symbol, tf, kh);
+   lo = iLow(_Symbol, tf, kl);
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+     {
+      if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
+      if(!MyOrder()) continue;
+      long key = OrderKey();
+      int dir = (OrderType() == OP_BUY) ? 1 : -1;
+      double en = OrderOpenPrice(), R = PGet(key, "R", 0);
+      double lv[4];
+      lv[0] = en;
+      lv[1] = PGet(key, "SL0", OrderStopLoss());
+      lv[2] = OrderStopLoss();
+      lv[3] = (R > 0) ? BoxTarget(key, dir, en, R) : 0;
+      for(int j = 0; j < 4; j++) if(lv[j] > 0) { hi = MathMax(hi, lv[j]); lo = MathMin(lo, lv[j]); }
+     }
+   if(x1 > 0) { hi = MathMax(hi, x1); lo = MathMin(lo, x1); }
+   if(x2 > 0) { hi = MathMax(hi, x2); lo = MathMin(lo, x2); }
+   if(hi <= lo) return false;
+   double pad = 0.07 * (hi - lo);
+   hi += pad;
+   lo -= pad;
+   return true;
+  }
+
+string ShotChart(string tag, double x1, double x2, string fileName = "")
+  {
+   string file = (fileName != "") ? fileName : "AK10_" + _Symbol + "_" + tag + ".png";
+   PanelHide();
+   double hi = 0, lo = 0;
+   bool fix = PhotoRange(x1, x2, hi, lo);
+   long oldFix = 0;
+   double oldMax = 0, oldMin = 0;
+   if(fix)
+     {
+      //--- fixed scale only for the photo (the old chart setting comes back right after)
+      oldFix = ChartGetInteger(0, CHART_SCALEFIX, 0);
+      oldMax = ChartGetDouble(0, CHART_FIXED_MAX, 0);
+      oldMin = ChartGetDouble(0, CHART_FIXED_MIN, 0);
+      ChartSetInteger(0, CHART_SCALEFIX, 1);
+      ChartSetDouble(0, CHART_FIXED_MAX, hi);
+      ChartSetDouble(0, CHART_FIXED_MIN, lo);
+      g_lbPpx = (hi - lo) / (double)ChartPhotoHeight;
+     }
+   DrawChart();
+   ChartRedraw(0);
+   bool ok = ChartScreenShot(0, file, ChartPhotoWidth, ChartPhotoHeight, ALIGN_RIGHT);
+   if(fix)
+     {
+      g_lbPpx = 0;
+      ChartSetInteger(0, CHART_SCALEFIX, oldFix);
+      if(oldFix != 0) { ChartSetDouble(0, CHART_FIXED_MAX, oldMax); ChartSetDouble(0, CHART_FIXED_MIN, oldMin); }
+      ChartRedraw(0);
+     }
+   g_lastPanel = 0;
+   UpdatePanel();
+   if(!ok || !FileIsExist(file)) return "";
+   return file;
+  }
+
+//--- one picture to admin / VIP / public, each chat only once per key, as a reply to the trade's entry message
+bool SendPhotoOnce(string key, string file, string capV, string capP, bool vip, bool pub, long tradeKey)
+  {
+   bool all = true;
+   string ok = (tradeKey > 0) ? OpenKey(tradeKey) : "";
+   for(int i = 0; i < 3; i++)
+     {
+      string chat = (i == 0) ? AdminChatId : ((i == 1) ? (vip ? VipChannelId : "") : (pub ? PublicChannelId : ""));
+      if(StringLen(chat) == 0) continue;
+      string gv = MsgSentGV(key, chat);
+      if(GlobalVariableCheck(gv)) continue;
+      int id = TgSendPhotoEx(chat, file, (i == 2) ? capP : capV, (i == 2) ? VipButtons() : "", (ok != "") ? MsgId(ok, chat) : 0);
+      if(id > 0) GlobalVariableSet(gv, (double)TimeCurrent());
+      else all = false;
+     }
+   return all;
+  }
+
+//--- chart photos: live with Telegram on, or in the Strategy Tester (visual mode) when the Telegram preview is on
+bool PhotoOK()
+  {
+   if(!SendChartPhoto) return false;
+   if(IsTesting()) return (TgPreviewOn() && IsVisualMode());
+   return (g_tg && !g_tgUrlErr);
+  }
+
+void TryOpenPhoto(long key)
+  {
+   if(!PhotoOK()) return;
+   int tries = (int)PGet(key, "IMGO", 0);
+   if(tries < 0 || tries >= 4) return;
+   PSet(key, "IMGO", tries + 1);
+   int dir = (int)PGet(key, "DIR", 0);
+   double en = PGet(key, "EN", 0);
+   string file = ShotChart("O" + IntegerToString(key), 0, 0);
+   if(file == "") return;
+   string cap = Emo(0x1F4F8) + " " + HashTag(_Symbol) + " <b>" + SideName(dir) + "</b> @ <code>" + Px(en) + "</code>\n<i>Green = target zone, red = risk zone.</i>";
+   if(SendPhotoOnce("IMGO_" + _Symbol + "_" + IntegerToString(key), file, cap, cap, PGet(key, "VIP", 0) > 0, PGet(key, "PUB", 0) > 0, key)) PSet(key, "IMGO", -1);
+   FileDelete(file);
+  }
+
+void SendClosePhoto(long key, int dir, double ex, double resR, bool vip, bool pub)
+  {
+   if(!PhotoOK()) return;
+   string file = ShotChart("C" + IntegerToString(key), PGet(key, "EN", 0), ex);
+   if(file == "") return;
+   string cap = Emo(0x1F4F8) + " " + HashTag(_Symbol) + " " + SideName(dir) + " closed @ <code>" + Px(ex) + "</code> - " + ProResult(resR);
+   SendPhotoOnce("IMGC_" + _Symbol + "_" + IntegerToString(key), file, cap, cap, vip, pub, key);
+   FileDelete(file);
+  }
+//==================================================================
+// TELEGRAM CONTENT (v10.3, one chart sends it - the "master"): real-result scoreboards (daily / weekly / monthly),
+// promotions, good-morning post + VIP brief, session alerts, polls, admin alerts + heartbeat, commands.
+// Every number in a post comes from the closed-trade log (AK10_trades_*.csv) - nothing is invented.
+//==================================================================
+//--- content slots: spacing, daily cap and quiet time after signals (shared by all charts)
+bool ContentSlotFree(bool timeCritical)
+  {
+   if(!UseContentManager) return true;
+   datetime now = TimeLocal();
+   double gap = timeCritical ? 10 : ContentMinGapMin;
+   if(now - (datetime)GVGet(TgGV("LASTX"), 0) < gap * 60) return false;
+   if(now - (datetime)GVGet(TgGV("LASTPUB"), 0) < (timeCritical ? 5 : QuietAfterSignalMin) * 60) return false;
+   if(ContentDailyCap > 0 && GVGet(TgGV("CNT" + DateKey()), 0) >= ContentDailyCap && !timeCritical) return false;
+   return true;
+  }
+void ContentMark() { GVSet(TgGV("LASTX"), (double)TimeLocal()); TgInc("CNT" + DateKey()); }
+
+//--- content posts only in the day hours of the audience (ContentHoursIST, e.g. "9-23"); signals and trade updates: any time
+bool ContentHoursNow()
+  {
+   string s = TrimStr(ContentHoursIST);
+   int p = StringFind(s, "-");
+   if(p <= 0) return true;
+   int a = (int)StringToInteger(StringSubstr(s, 0, p)), b = (int)StringToInteger(StringSubstr(s, p + 1));
+   if(a == b || a < 0 || b < 0 || a > 24 || b > 24) return true;
+   int h = TimeHour(NowIST());
+   return (a < b) ? (h >= a && h < b) : (h >= a || h < b);
+  }
+
+//------------------------------------------------------------------
+// CLOSED-TRADE STATS from the CSV logs of all charts
+//------------------------------------------------------------------
+int      g_csN = 0, g_csW = 0, g_csL = 0, g_csBE = 0;
+double   g_csNet = 0, g_csSumR = 0, g_csBestR = 0;
+string   g_csBest = "", g_csSyms = "";
+double   g_csDay[40];                     // net USD per IST day (index 0 = oldest of the last 40 days)
+
+string IstText(datetime ist) { return TimeToString(ist, TIME_DATE | TIME_MINUTES); }
+
+void ClosedStats(datetime fromIST)
+  {
+   g_csN = 0; g_csW = 0; g_csL = 0; g_csBE = 0; g_csNet = 0; g_csSumR = 0; g_csBestR = -999; g_csBest = ""; g_csSyms = "";
+   for(int d = 0; d < 40; d++) g_csDay[d] = 0;
+   string from = IstText(fromIST);
+   datetime today0 = NowIST() - (NowIST() % 86400);
+   string syms[];
+   int scn[];
+   double sr[];
+   int ns = 0;
+   string fname = "";
+   long fh = FileFindFirst("AK10_trades_*.csv", fname);
+   if(fh == INVALID_HANDLE) return;
+   do
+     {
+      int h = FileOpen(fname, FILE_READ | FILE_TXT | FILE_ANSI | FILE_SHARE_READ | FILE_SHARE_WRITE);
+      if(h == INVALID_HANDLE) continue;
+      while(!FileIsEnding(h))
+        {
+         string ln = FileReadString(h);
+         if(StringLen(ln) < 20 || StringFind(ln, "Date,") == 0) continue;
+         string p[];
+         if(StringSplit(ln, ',', p) < 15) continue;
+         string ct = p[11];
+         datetime cti = StringToTime(ct);
+         int di = 39 - (int)((today0 - (cti - (cti % 86400))) / 86400);
+         double pr = StringToDouble(p[13]), rr = StringToDouble(p[14]);
+         if(di >= 0 && di < 40) g_csDay[di] += pr;
+         if(ct < from) continue;
+         g_csN++;
+         g_csNet += pr;
+         g_csSumR += rr;
+         if(rr > 0.05) g_csW++;
+         else if(rr < -0.05) g_csL++;
+         else g_csBE++;
+         if(rr > g_csBestR) { g_csBestR = rr; g_csBest = p[1] + " " + p[2]; }
+         int k = -1;
+         for(int q = 0; q < ns; q++) if(syms[q] == p[1]) { k = q; break; }
+         if(k < 0) { ns++; ArrayResize(syms, ns); ArrayResize(scn, ns); ArrayResize(sr, ns); k = ns - 1; syms[k] = p[1]; scn[k] = 0; sr[k] = 0; }
+         scn[k]++;
+         sr[k] += rr;
+        }
+      FileClose(h);
+     }
+   while(FileFindNext(fh, fname));
+   FileFindClose(fh);
+   for(int q2 = 0; q2 < ns; q2++) g_csSyms += "\n" + SymEmoji(syms[q2]) + " " + HashTag(syms[q2]) + ": " + IntegerToString(scn[q2]) + " trades, " + Rx(sr[q2]);
+  }
+
+//--- equity curve of the last n days as a little bar chart (from the daily results)
+string Sparkline(int n)
+  {
+   if(n > 40) n = 40;
+   double c[];
+   ArrayResize(c, n);
+   double run = 0, mn = 0, mx = 0;
+   for(int i = 0; i < n; i++)
+     {
+      run += g_csDay[40 - n + i];
+      c[i] = run;
+      if(i == 0 || run < mn) mn = run;
+      if(i == 0 || run > mx) mx = run;
+     }
+   string s = "";
+   for(int j = 0; j < n; j++)
+     {
+      int lv = (mx > mn) ? (int)MathRound(7.0 * (c[j] - mn) / (mx - mn)) : 3;
+      s += ShortToString((ushort)(0x2581 + lv));
+     }
+   return s;
+  }
+
+datetime IstDayStart() { datetime t = NowIST(); return t - (t % 86400); }
+
+string ScoreText(string title, bool pub)
+  {
+   int wr = (g_csW + g_csL > 0) ? (int)MathRound(100.0 * g_csW / (g_csW + g_csL)) : 0;
+   string t = title + "\n" + Divider() +
+              "\n" + Emo(0x1F4CC) + " Trades closed: <b>" + IntegerToString(g_csN) + "</b>" +
+              "\n" + Emo(0x2705) + " Wins: <b>" + IntegerToString(g_csW) + "</b>   " + Emo(0x1F6E1) + " Break-even: <b>" + IntegerToString(g_csBE) + "</b>   " + Emo(0x1F6D1) + " Losses: <b>" + IntegerToString(g_csL) + "</b>" +
+              "\n" + Emo(0x1F3AF) + " Win rate (wins vs losses): <b>" + IntegerToString(wr) + "%</b>  " + Bar((int)MathRound(wr / 10.0), 10) +
+              "\n" + Emo(0x1F4B0) + " Total: <b>" + Rx(g_csSumR) + "</b> <i>(R = times the risk)</i>";
+   if(g_csN > 0 && g_csBestR > 0.05) t += "\n" + Emo(0x1F3C6) + " Best trade: <b>" + Rx(g_csBestR) + "</b> (" + HtmlEsc(g_csBest) + ")";
+   if(!pub && g_csSyms != "") t += "\n" + g_csSyms;
+   t += "\n" + Divider() + "\n<i>Real results - wins and losses, no editing. Past results do not guarantee future results.</i>";
+   return t;
+  }
+
+//------------------------------------------------------------------
+// ADMIN REPORT (full) + VIP / public scoreboards
+//------------------------------------------------------------------
+string ReportText(string date)
+  {
+   ClosedStats(IstDayStart());
+   string pre = g_SP + date + "_";
+   string lines = "";
+   int n = GlobalVariablesTotal();
+   for(int i = 0; i < n; i++)
+     {
+      string nm = GlobalVariableName(i);
+      if(StringFind(nm, pre) != 0 || StringSubstr(nm, StringLen(nm) - 4) != "_OPN") continue;
+      string sym = StringSubstr(nm, StringLen(pre), StringLen(nm) - StringLen(pre) - 4);
+      lines += "\n" + HtmlEsc(sym) + ": opened " + IntegerToString((int)GlobalVariableGet(nm)) + " (PB " + IntegerToString((int)GVGet(pre + sym + "_OPNPB", 0)) + ", BO " +
+               IntegerToString((int)GVGet(pre + sym + "_OPNBO", 0)) + ", MEM " + IntegerToString((int)GVGet(pre + sym + "_OPNMEM", 0)) + ", TR " + IntegerToString((int)GVGet(pre + sym + "_OPNTR", 0)) + ")";
+     }
+   string sp = Sparkline(30);
+   return Emo(0x1F4CA) + " <b>DAILY REPORT - " + date + "</b>\n" + Divider() +
+          "\nClosed: " + IntegerToString(g_csN) + " | won " + IntegerToString(g_csW) + " | even " + IntegerToString(g_csBE) + " | lost " + IntegerToString(g_csL) +
+          "\nNet: <b>" + Usd(g_csNet) + " USD</b> (" + Rx(g_csSumR) + ")" + ((g_csN > 0 && g_csBestR > -999) ? " | best " + Rx(g_csBestR) + " " + HtmlEsc(g_csBest) : "") +
+          g_csSyms + ((lines != "") ? "\n" + lines : "") +
+          "\n\n30 days: " + sp + ScoreboardText(true) +
+          "\n\nBalance: " + DoubleToString(AccountBalance(), 2) + " | Equity: " + DoubleToString(AccountEquity(), 2) + " " + AccountCurrency() + " | open trades " + IntegerToString(CountAKOpen());
+  }
+
+//--- all-time scoreboard per symbol and method (admin)
+string ScoreboardText(bool html)
+  {
+   string pre = g_SP + "SB_";
+   string out = "";
+   int n = GlobalVariablesTotal();
+   for(int i = 0; i < n; i++)
+     {
+      string nm = GlobalVariableName(i);
+      if(StringFind(nm, pre) != 0 || StringSubstr(nm, StringLen(nm) - 2) != "_N") continue;
+      string mid = StringSubstr(nm, StringLen(pre), StringLen(nm) - StringLen(pre) - 2);
+      double cnt = GlobalVariableGet(nm);
+      if(cnt <= 0) continue;
+      double w = GVGet(pre + mid + "_W", 0), pl = GVGet(pre + mid + "_PL", 0), r = GVGet(pre + mid + "_R", 0);
+      string ln = mid + ": " + DoubleToString(cnt, 0) + " trades, win " + DoubleToString(100.0 * w / cnt, 0) + "%, " + Usd(pl) + " USD, avg " + DoubleToString(r / cnt, 2) + "R";
+      out += "\n" + (html ? HtmlEsc(ln) : ln);
+     }
+   return (out != "") ? "\n\n<b>All time (symbol_method)</b>" + out : "";
+  }
+
+string StatusText()
+  {
+   string s = Emo(0x1F4CB) + " <b>OPEN TRADES</b>\n" + Divider();
+   int c = 0;
+   double tot = 0;
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+     {
+      if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
+      if(!IsAKMagic(OrderMagicNumber()) || OrderType() > OP_SELL) continue;
+      double pl = OrderProfit() + OrderSwap() + OrderCommission();
+      tot += pl;
+      string cm = OrderComment();
+      StringReplace(cm, TradeComment + " ", "");
+      s += "\n" + HtmlEsc(OrderSymbol()) + " " + MethodName(MethodOfMagic(OrderMagicNumber())) + " " + ((OrderType() == OP_BUY) ? "BUY" : "SELL") + " " + DoubleToString(OrderLots(), 2) + " @ " +
+           DoubleToString(OrderOpenPrice(), (int)MarketInfo(OrderSymbol(), MODE_DIGITS)) + " (" + HtmlEsc(cm) + ") | " + Usd(pl) + " USD";
+      c++;
+     }
+   if(c == 0) s += "\nNo open trades.";
+   else s += "\n\nOpen: " + IntegerToString(c) + " | floating " + Usd(tot) + " USD";
+   return s + "\nBalance " + DoubleToString(AccountBalance(), 2) + " | Equity " + DoubleToString(AccountEquity(), 2) + " " + AccountCurrency();
+  }
+
+void DailyReportTick()
+  {
+   if(DailyReportHourIST < 0) return;
+   datetime ist = NowIST();
+   if(TimeHour(ist) < DailyReportHourIST) return;
+   string dk = DateKey();
+   if(GlobalVariableCheck(TgGV("DR" + dk))) return;
+   GVSet(TgGV("DR" + dk), 1);
+   TgSend(AdminChatId, ReportText(dk));
+   ClosedStats(IstDayStart());
+   if(g_csN == 0)
+     {
+      if(SendToVip) TgSendEx(VipChannelId, Emo(0x1F4CA) + " <b>TODAY'S SCOREBOARD</b>\n" + Divider() + "\n" + Emo(0x1F9D8) + " No trades closed today - <b>we don't force trades</b>. Patience is a position too." + Sig(), "", 0);
+      return;
+     }
+   if(SendToVip) TgSendEx(VipChannelId, ScoreText(Emo(0x1F4CA) + " <b>TODAY'S SCOREBOARD</b> " + Emo(0x1F4CA), false) + Sig(), "", 0);
+   if(SendToPublic) { TgSendEx(PublicChannelId, ScoreText(Emo(0x1F4CA) + " <b>TODAY'S SCOREBOARD</b> " + Emo(0x1F4CA), true) + "\n" + Emo(0x1F48E) + " <b>Get every trade tomorrow in VIP - " + VipPrice() + "</b>" + Sig(), VipButtons(), 0); ContentMark(); }
+  }
+
+void WeeklyMonthlyTick()
+  {
+   if(!ContentHoursNow()) return;
+   datetime ist = NowIST();
+   string dk = DateKey();
+   if(TimeDayOfWeek(ist) == WeeklyReportDayIST && TimeHour(ist) >= WeeklyReportHourIST && !GlobalVariableCheck(TgGV("WK" + dk)))
+     {
+      GVSet(TgGV("WK" + dk), 1);
+      ClosedStats(ist - 7 * 86400);
+      string sp = Sparkline(7);
+      TgSend(AdminChatId, ScoreText(Emo(0x1F5D3) + " <b>WEEKLY REPORT (last 7 days)</b>", false) + "\nNet " + Usd(g_csNet) + " USD | 7 days " + sp);
+      if(g_csN > 0)
+        {
+         if(SendToVip) TgSendEx(VipChannelId, ScoreText(Emo(0x1F5D3) + " <b>WEEKLY RECAP</b> " + Emo(0x1F4CA), false) + "\n" + Emo(0x1F4C8) + " Week curve: " + sp + Sig(), "", 0);
+         if(SendToPublic) { TgSendEx(PublicChannelId, ScoreText(Emo(0x1F5D3) + " <b>WEEKLY RECAP</b> " + Emo(0x1F4CA), true) + "\n" + Emo(0x1F48E) + " <b>Start next week in VIP - " + VipPrice() + "</b>" + Sig(), VipButtons(), 0); ContentMark(); }
+        }
+     }
+   if(TimeDay(ist) == 1 && TimeHour(ist) >= WeeklyReportHourIST && !GlobalVariableCheck(TgGV("MO" + dk)))
+     {
+      GVSet(TgGV("MO" + dk), 1);
+      datetime m0 = IstDayStart() - 86400;                                  // last day of the previous month
+      datetime from = m0 - (TimeDay(m0) - 1) * 86400;
+      ClosedStats(from);
+      string mname = TimeToString(m0, TIME_DATE);
+      mname = StringSubstr(mname, 0, 7);
+      TgSend(AdminChatId, ScoreText(Emo(0x1F5D3) + " <b>MONTHLY REPORT " + mname + "</b>", false) + "\nNet " + Usd(g_csNet) + " USD | 30 days " + Sparkline(30));
+      if(g_csN > 0)
+        {
+         if(SendToVip) TgSendEx(VipChannelId, ScoreText(Emo(0x1F3C6) + " <b>MONTH IN REVIEW - " + mname + "</b>", false) + "\n" + Emo(0x1F4C8) + " " + Sparkline(30) + Sig(), "", 0);
+         if(SendToPublic) { TgSendEx(PublicChannelId, ScoreText(Emo(0x1F3C6) + " <b>MONTH IN REVIEW - " + mname + "</b>", true) + "\n" + Emo(0x1F48E) + " <b>Join VIP for the new month - " + VipPrice() + "</b>" + Sig(), VipButtons(), 0); ContentMark(); }
+        }
+     }
+  }
+
+//------------------------------------------------------------------
+// PROMOTIONS (public channel, buttons JOIN VIP + Message Admin) - honest: features we really have, real numbers only
+//------------------------------------------------------------------
+#define PROMO_COUNT 16
+string PromoCTA() { return "\n" + Divider() + "\n" + Emo(0x1F447) + " <b>Tap JOIN VIP</b> or <b>Message Admin</b> " + Emo(0x1F447); }
+
+string MarketsList()
+  {
+   string s = "";
+   if(TradeGold) s += "\n" + Emo(0x1F947) + " <b>GOLD</b>  XAUUSD";
+   if(TradeBTC) s += "\n" + ShortToString((ushort)0x20BF) + " <b>BITCOIN</b>  BTCUSD";
+   if(TradeETH) s += "\n" + Emo(0x1F537) + " <b>ETHEREUM</b>  ETHUSD";
+   if(TradeOil) s += "\n" + Emo(0x1F6E2) + " <b>OIL</b>  USOIL";
+   if(TradeEUR) s += "\n" + Emo(0x1F4B6) + " <b>EURO</b>  EURUSD";
+   return s;
+  }
+
+string TipOfDay(int i)
+  {
+   switch(i % 6)
+     {
+      case 0: return "Book part of your profit early, move the stop to entry, and let the rest run.";
+      case 1: return "Trade with the bigger trend - a pull-back in an uptrend is a gift, not a reason to sell.";
+      case 2: return "Never move your stop loss further away. Move it closer, never wider.";
+      case 3: return "No setup is a setup too - sitting out a messy market saves money.";
+      case 4: return "Risk the same small amount on every trade. One trade should never decide your month.";
+      case 5: return "Big news can spike the price both ways - wait for the dust to settle before entering.";
+     }
+   return "";
+  }
+
+bool BuildPromo(int i, string &text)
+  {
+   string v = VipPrice();
+   string ok = Emo(0x2705), pin = Emo(0x1F4CC), gem = Emo(0x1F48E), x = Emo(0x274C), vipOnly = Emo(0x1F512) + " VIP knows";
+   switch(i % PROMO_COUNT)
+     {
+      case 0:
+         text = Emo(0x1F451) + " <b>VIP DOORS ARE OPEN</b> " + Emo(0x1F451) + "\n" + Divider() +
+                "\n<blockquote>" + Emo(0x1F4CD) + " Public sees <b>some</b> trades.\n" + gem + " VIP sees <b>every</b> trade - live.</blockquote>" +
+                "\n" + ok + " Every signal the moment it opens" + "\n" + ok + " Exact entry, stop loss and targets" + "\n" + ok + " The reason behind every trade" +
+                "\n" + ok + " Partial profit + risk-free stop alerts" + "\n" + ok + " Trailing / profit-lock updates until the exit" + "\n" + ok + " \"Setup loading\" heads-up before entries" +
+                "\n\n" + Emo(0x1F4B8) + " All of it for just <b>" + v + "</b>" + PromoCTA();
+         return true;
+      case 1:
+         text = Emo(0x1F440) + " <b>POV: you only saw the entry...</b>\n" + Divider() +
+                "\n<blockquote>" + Emo(0x1F3AF) + " Targets: <tg-spoiler>" + vipOnly + "</tg-spoiler>\n" + Emo(0x1F9E0) + " Reason: <tg-spoiler>" + vipOnly + "</tg-spoiler>" +
+                "\n" + Emo(0x1F6E1) + " Risk-free move: <tg-spoiler>" + vipOnly + "</tg-spoiler>\n" + Emo(0x1F4E3) + " Live updates: <tg-spoiler>" + vipOnly + "</tg-spoiler></blockquote>" +
+                "\nSame trade. <b>Completely different experience.</b>\n" + gem + " Unlock everything - <b>" + v + "</b>" + PromoCTA();
+         return true;
+      case 2:
+        {
+         ClosedStats(NowIST() - 7 * 86400);
+         if(g_csN < 3) return false;
+         text = ScoreText(Emo(0x1F4CA) + " <b>LAST 7 DAYS - REAL NUMBERS</b>", true) + "\nEvery one of these went to VIP <b>with the full plan</b> the second it opened." +
+                "\n\n" + gem + " <b>Get the next one - " + v + "</b>" + PromoCTA();
+         return true;
+        }
+      case 3:
+         text = Emo(0x1F4F1) + " <b>A TRADE IN THE LIFE OF A VIP</b>\n" + Divider() +
+                "\n<blockquote>" + Emo(0x1F440) + " <b>SETUP LOADING</b> - heads-up before the entry" + "\n" + Emo(0x1F680) + " <b>NEW SIGNAL</b> - entry, stop, targets ready to copy" +
+                "\n" + Emo(0x1F4B0) + " Target 1 hit - half booked" + "\n" + Emo(0x1F6E1) + " Stop moved to entry - risk-free" + "\n" + Emo(0x1F525) + " Trailing stop locks in more" +
+                "\n" + Emo(0x1F389) + " Exit alert with the result</blockquote>" + "\n<i>(how every VIP trade is managed)</i>" +
+                "\n\nNo staring at charts all day. No panic. <b>Just a plan.</b>\n" + gem + " <b>" + v + "</b>" + PromoCTA();
+         return true;
+      case 4:
+         text = Emo(0x1F9E0) + " <b>WHAT WE CHECK BEFORE EVERY TRADE</b>\n" + Divider() +
+                "\n<blockquote>" + pin + " Daily + 4-hour trend must agree" + "\n" + pin + " A clean pull-back or breakout confirmation" +
+                "\n" + pin + " Spread and volatility safety checks" + "\n" + pin + " High-impact news calendar" + "\n" + pin + " Fixed risk per trade</blockquote>" +
+                "\nOnly when everything lines up do we take the trade.\n" + gem + " <b>Every trade goes to VIP - " + v + "</b>" + PromoCTA();
+         return true;
+      case 5:
+         text = Emo(0x1F6E1) + " <b>RULE #1: PROTECT YOUR CAPITAL</b>\n" + Divider() +
+                "\nMost traders blow accounts because they trade <b>without a plan</b>.\n\nEvery VIP trade comes with:" +
+                "\n" + ok + " A stop loss from the first second" + "\n" + ok + " Profit booked or locked early" + "\n" + ok + " Stop moved to entry once in profit" + "\n" + ok + " A trailing stop for the big moves" +
+                "\n\n" + Emo(0x1F4AA) + " <i>Small losses. Protected winners.</i>\n" + gem + " <b>" + v + "</b>" + PromoCTA();
+         return true;
+      case 6:
+         text = Emo(0x1F30D) + " <b>MARKETS WE TRADE</b>\n" + Divider() + MarketsList() +
+                "\n\nWhatever is moving, VIP gets the setup - with stop loss and targets.\n" + gem + " <b>" + v + "</b>" + PromoCTA();
+         return true;
+      case 7:
+         text = Emo(0x1F4B8) + " <b>WHAT " + v + " UNLOCKS</b>\n" + Divider() +
+                "\n" + ok + " Every executed trade, live" + "\n" + ok + " Exact entry, stop and targets (tap to copy)" + "\n" + ok + " The reason for every trade" +
+                "\n" + ok + " Risk-free and profit-lock alerts" + "\n" + ok + " Setup heads-ups before entries" + "\n" + ok + " Daily, weekly and monthly scoreboards" + "\n" + ok + " Direct line to the admin" +
+                "\n\n" + Emo(0x1F914) + " <i>One avoided bad trade can be worth more than that.</i>" + PromoCTA();
+         return true;
+      case 8:
+         text = Emo(0x1F92F) + " <b>SOUND FAMILIAR?</b>\n" + Divider() +
+                "\n" + x + " Entering late, after the move is gone" + "\n" + x + " No stop loss... then praying" + "\n" + x + " Closing winners early, holding losers" + "\n" + x + " Revenge trading after a loss" +
+                "\n\n" + Emo(0x1F4A1) + " <b>The fix: a plan for every trade.</b>\nVIP gives you exactly that - entry, stop, targets and live management.\n" + gem + " <b>" + v + "</b>" + PromoCTA();
+         return true;
+      case 9:
+         text = Emo(0x1F680) + " <b>JOIN VIP IN 3 EASY STEPS</b>\n" + Divider() +
+                "\n1" + ShortToString((ushort)0xFE0F) + ShortToString((ushort)0x20E3) + " Tap <b>Message Admin</b> below" +
+                "\n2" + ShortToString((ushort)0xFE0F) + ShortToString((ushort)0x20E3) + " Pay <b>" + v + "</b>" +
+                "\n3" + ShortToString((ushort)0xFE0F) + ShortToString((ushort)0x20E3) + " Get added and receive the very next trade" +
+                "\n\n" + Emo(0x1F4AC) + " Questions first? Ask the admin anything." + PromoCTA();
+         return true;
+      case 10:
+         text = Emo(0x2753) + " <b>VIP FAQ</b>  <i>(tap to expand)</i>\n" + Divider() +
+                "\n<blockquote expandable><b>Is VIP good for beginners?</b>\nYes. Every call has a clear BUY / SELL with exact entry, stop loss and targets." +
+                "\n\n<b>Which markets?</b>\nGold, Bitcoin, Ethereum and Oil" + (TradeEUR ? ", and EURUSD." : ".") +
+                "\n\n<b>Which timeframes?</b>\nFrom the 5-minute to the 4-hour chart - both quick trades and trend rides." +
+                "\n\n<b>Do I get updates after the entry?</b>\nYes - partial profit, risk-free stop, profit lock, trailing stop and the final exit." +
+                "\n\n<b>How do I join?</b>\nTap Message Admin below and the admin adds you.</blockquote>\n" + gem + " <b>" + v + "</b>" + PromoCTA();
+         return true;
+      case 11:
+         text = Emo(0x1F4A1) + " <b>TRADING TIP OF THE DAY</b>\n" + Divider() +
+                "\n<blockquote><i>" + TipOfDay(TimeDayOfYear(NowIST())) + "</i></blockquote>" +
+                "\n" + ok + " Every VIP trade is managed with these rules - live.\n" + gem + " <b>" + v + "</b>" + PromoCTA();
+         return true;
+      case 12:
+         text = Emo(0x26A1) + " <b>PUBLIC vs VIP</b>\n" + Divider() +
+                "\n" + ShortToString((ushort)0x26AA) + " <b>Public:</b> selected trades, entry + stop" + "\n" + gem + " <b>VIP:</b> <u>every</u> trade" +
+                "\n" + gem + " <b>VIP:</b> targets + the reason" + "\n" + gem + " <b>VIP:</b> risk-free / profit-lock / trailing updates" + "\n" + gem + " <b>VIP:</b> setup heads-ups before entries" +
+                "\n\n" + Emo(0x1F449) + " <b>Upgrade for " + v + "</b>" + PromoCTA();
+         return true;
+      case 13:
+         text = Emo(0x23F3) + " <b>THE NEXT SIGNAL COULD DROP ANY MINUTE...</b>\n" + Divider() +
+                "\nBy the time most people open their chart, the best entry is gone." +
+                "\n\nVIP members get the alert <b>instantly</b> - stop and targets ready to copy " + Emo(0x1F4F2) +
+                "\n\n" + Emo(0x1F514) + " <i>Don't be the one who sees the result post and thinks \"I should have joined\".</i>\n" + gem + " <b>" + v + "</b>" + PromoCTA();
+         return true;
+      case 14:
+         text = Emo(0x1F3AF) + " <b>WE TRADE LESS. WE TRADE BETTER.</b>\n" + Divider() + "\nWe skip a trade when:" +
+                "\n" + x + " the daily and 4-hour trends disagree" + "\n" + x + " big news is due" + "\n" + x + " the spread is too wide" + "\n" + x + " the market is wild and against the big trend" +
+                "\n\nWhat is left are clean setups - and VIP gets <b>all</b> of them.\n" + gem + " <b>" + v + "</b>" + PromoCTA();
+         return true;
+      case 15:
+        {
+         ClosedStats(NowIST() - 7 * 86400);
+         if(g_csN < 1 || g_csBestR < 1.0) return false;
+         text = Emo(0x1F3C6) + " <b>TRADE OF THE WEEK</b> " + Emo(0x1F3C6) + "\n" + Divider() +
+                "\n" + Emo(0x1F4CC) + " " + HtmlEsc(g_csBest) + "\n" + Emo(0x1F4B0) + " Result: <b>" + Rx(g_csBestR) + "</b> <i>(" + DoubleToString(g_csBestR, 1) + "x the risk)</i>" +
+                "\n\nVIP had the entry, stop and every update live.\n<i>Real trade from our log. Past results do not guarantee future results.</i>\n" + gem + " <b>" + v + "</b>" + PromoCTA();
+         return true;
+        }
+     }
+   text = Emo(0x1F525) + " <b>READY TO STOP GUESSING?</b>\n" + Divider() + "\n" + Emo(0x1F4C8) + " Clear entries" + "\n" + Emo(0x1F6E1) + " Fixed stop losses" +
+          "\n" + Emo(0x1F4B0) + " Profit booked step by step" + "\n" + Emo(0x1F4E3) + " Live updates until the exit" + "\n\nJoin VIP today and get the very next trade with full details.\n" + gem + " <b>Only " + v + "</b>" + PromoCTA();
+   return true;
+  }
+
+void Promotions()
+  {
+   if(!PromotionsEnabled || !SendToPublic || !ContentHoursNow()) return;
+   datetime now = TimeLocal();
+   datetime last = (datetime)GVGet(TgGV("PROMOT"), 0);
+   if(last == 0) { GVSet(TgGV("PROMOT"), (double)now); return; }
+   if(now - last < PromoIntervalMin * 60) return;
+   if(!ContentSlotFree(false)) return;
+   int idx = (int)GVGet(TgGV("PROMOI"), 0);
+   string text = "";
+   int tries = 0;
+   while(!BuildPromo(idx, text) && tries < PROMO_COUNT) { idx = (idx + 1) % PROMO_COUNT; tries++; }
+   if(TgSendEx(PublicChannelId, text + Sig(), VipButtons(), 0) > 0)
+     {
+      ContentMark();
+      GVSet(TgGV("PROMOI"), (idx + 1) % PROMO_COUNT);
+      GVSet(TgGV("PROMOT"), (double)now);
+     }
+   else GVSet(TgGV("PROMOT"), (double)(now - PromoIntervalMin * 60 + 600));
+  }
+
+//------------------------------------------------------------------
+// GOOD MORNING + VIP BRIEF, SESSIONS, POLLS
+//------------------------------------------------------------------
+bool IsWeekendIST() { int d = TimeDayOfWeek(NowIST()); return (d == 0 || d == 6); }
+
+string TodayNewsText()
+  {
+   string out = "";
+   datetime today = IstDayStart();
+   int cnt = 0;
+   for(int i = 0; i < g_nwN && cnt < 6; i++)
+     {
+      datetime ti = g_nwT[i] + 19800;
+      if(ti < today || ti >= today + 86400) continue;
+      out += "\n" + Emo(0x1F4F0) + " " + TimeToString(ti, TIME_MINUTES) + " IST - " + HtmlEsc(g_nwName[i]);
+      cnt++;
+     }
+   return out;
+  }
+
+//--- symbols of the charts that are running (registry written by every chart)
+int RunningSymbols(string &out[])
+  {
+   ArrayResize(out, 0);
+   int n = GlobalVariablesTotal(), k = 0;
+   string pre = TgPreviewOn() ? "AK10QR_" : "AK10R_";
+   for(int i = 0; i < n; i++)
+     {
+      string nm = GlobalVariableName(i);
+      if(StringFind(nm, pre) != 0) continue;
+      if(TimeLocal() - (datetime)GlobalVariableGet(nm) > 180) continue;
+      ArrayResize(out, k + 1);
+      out[k++] = StringSubstr(nm, StringLen(pre));
+     }
+   return k;
+  }
+
+string KeyLevelsText()
+  {
+   string syms[];
+   int n = RunningSymbols(syms);
+   string out = "";
+   bool wk = IsWeekendIST();
+   for(int i = 0; i < n; i++)
+     {
+      string sy = syms[i];
+      int cls = ClassifySymbol(sy);
+      if(wk && cls != SC_BTC && cls != SC_ETH) continue;
+      int dg = (int)MarketInfo(sy, MODE_DIGITS);
+      double ph = iHigh(sy, PERIOD_D1, 1), pl = iLow(sy, PERIOD_D1, 1);
+      if(ph <= 0 || pl <= 0) continue;
+      int kh = iHighest(sy, PERIOD_H4, MODE_HIGH, 20, 1), kl = iLowest(sy, PERIOD_H4, MODE_LOW, 20, 1);
+      string h4 = (kh >= 0 && kl >= 0) ? "  |  4H range <code>" + DoubleToString(iLow(sy, PERIOD_H4, kl), dg) + "</code> - <code>" + DoubleToString(iHigh(sy, PERIOD_H4, kh), dg) + "</code>" : "";
+      out += "\n" + SymEmoji(sy) + " <b>" + HtmlEsc(sy) + "</b>  Yesterday H <code>" + DoubleToString(ph, dg) + "</code> L <code>" + DoubleToString(pl, dg) + "</code>" + h4;
+     }
+   return out;
+  }
+
+void MorningPost()
+  {
+   datetime ist = NowIST();
+   if(TimeHour(ist) != MorningPostHourIST) return;
+   string dk = DateKey();
+   if(GlobalVariableCheck(MsgSentGV("MORNING_" + dk, PublicChannelId))) return;
+   if(!ContentSlotFree(true)) return;
+   bool wk = IsWeekendIST();
+   string news = TodayNewsText();
+   //--- trades that closed since last night's scoreboard (real log)
+   ClosedStats(IstDayStart() - (24 - MathMax(0, MathMin(24, DailyReportHourIST))) * 3600);
+   string night = (g_csN > 0) ? "\n\n" + Emo(0x1F319) + " <b>Overnight:</b> " + IntegerToString(g_csN) + " trade(s) closed - " + IntegerToString(g_csW) + " win, " +
+                  IntegerToString(g_csL) + " loss, " + IntegerToString(g_csBE) + " even  (" + Rx(g_csSumR) + ")" : "";
+   string txt = Emo(0x2600) + " <b>GOOD MORNING TRADERS</b> " + Emo(0x2615) + "\n" + Divider() +
+                "\n" + Emo(0x1F4C5) + " " + TimeToString(ist, TIME_DATE) +
+                (wk ? "\n" + Emo(0x1F30D) + " Weekend: gold and oil are closed - we watch <b>BITCOIN and ETHEREUM</b>." : "\n" + Emo(0x1F30D) + " On the radar today:" + MarketsList()) +
+                ((news != "") ? "\n\n<b>High-impact news today:</b>" + news + "\n<i>No new trades around these times.</i>" : "\n\n" + Emo(0x2705) + " No major news today.") + night +
+                "\n\n" + Emo(0x1F514) + " Turn on notifications - setups drop the moment they are ready." + PromoCTA();
+   TgSticker(PublicChannelId, StickerMorning, "MORNING_" + dk + "_S");
+   if(SendToPublic && SendOnceId("MORNING_" + dk, PublicChannelId, txt + Sig(), VipButtons(), 0) > 0) ContentMark();
+   if(SendToVip)
+     {
+      string lv = KeyLevelsText();
+      string vtxt = Emo(0x2600) + " <b>VIP MORNING BRIEF</b> " + Emo(0x2615) + "\n" + Divider() +
+                    ((news != "") ? "\n<b>News today (no new trades around these):</b>" + news : "\n" + Emo(0x2705) + " No major news today.") +
+                    ((lv != "") ? "\n\n<b>Key levels:</b>" + lv : "") + night +
+                    "\n\n<i>Breaks of yesterday's high / low and of the 4-hour range are where our breakout setups come from.</i>" + Sig();
+      SendOnceId("VIPMORNING_" + dk, VipChannelId, vtxt, "", 0);
+     }
+  }
+
+int HHMM(string t) { if(StringLen(t) < 5) return -1; return (int)StringToInteger(StringSubstr(t, 0, 2)) * 60 + (int)StringToInteger(StringSubstr(t, 3, 2)); }
+
+void SessionPosts()
+  {
+   if(IsWeekendIST() || !SendToPublic) return;
+   datetime ist = NowIST();
+   int now = TimeHour(ist) * 60 + TimeMinute(ist);
+   string dk = DateKey();
+   for(int i = 0; i < 2; i++)
+     {
+      string nm = (i == 0) ? "LONDON" : "NEW YORK";
+      int o = HHMM((i == 0) ? LondonOpenIST : NYOpenIST), c = HHMM((i == 0) ? LondonCloseIST : NYCloseIST);
+      if(o < 0 || c < 0) continue;
+      int until = o - now;
+      if(until >= 3 && until <= SessionPreMin && ContentHoursNow())
+        {
+         string key = "SESPRE_" + IntegerToString(i) + "_" + dk;
+         if(!GlobalVariableCheck(MsgSentGV(key, PublicChannelId)) && ContentSlotFree(true))
+           {
+            string txt = Emo(0x1F514) + " <b>" + nm + " SESSION STARTS IN " + IntegerToString(until) + " MIN</b>\n" + Divider() +
+                         "\n" + Emo(0x26A1) + " Volume and volatility are coming in." + "\n" + Emo(0x1F440) + " We are watching the setups live." +
+                         "\n\n" + Emo(0x1F525) + " <b>React " + Emo(0x1F525) + " if you are ready!</b>" + VipLine() + Sig();
+            if(SendOnceId(key, PublicChannelId, txt, VipButtons(), 0) > 0) ContentMark();
+           }
+        }
+      int since = now - c;
+      if(since < 0) since += 1440;
+      if(since <= 20)
+        {
+         string key2 = "SESEND_" + IntegerToString(i) + "_" + dk;
+         if(!GlobalVariableCheck(MsgSentGV(key2, PublicChannelId)) && ContentSlotFree(true))
+           {
+            GlobalVariableSet(MsgSentGV(key2, PublicChannelId), (double)TimeCurrent());      // looked at once per session
+            int dur = c - o;
+            if(dur <= 0) dur += 1440;
+            ClosedStats(ist - (since + dur) * 60);
+            if(g_csN == 0 || !ContentHoursNow()) continue;                                  // nothing closed / night: no post
+            string body = "\n" + Emo(0x1F4CC) + " Trades closed: <b>" + IntegerToString(g_csN) + "</b>\n" + Emo(0x2705) + " Wins: <b>" + IntegerToString(g_csW) + "</b>   " + Emo(0x1F6E1) + " Even: <b>" + IntegerToString(g_csBE) + "</b>   " + Emo(0x1F6D1) + " Losses: <b>" + IntegerToString(g_csL) + "</b>" +
+                          ((g_csBestR > 0.05) ? "\n" + Emo(0x1F3C6) + " Best: <b>" + Rx(g_csBestR) + "</b> (" + HtmlEsc(g_csBest) + ")" : "") + "\n<i>Real results - wins and losses.</i>";
+            string txt2 = Emo(0x1F3C1) + " <b>" + nm + " SESSION CLOSED</b>\n" + Divider() + body + "\n\n" + Emo(0x1F48E) + " <b>Next session in VIP - " + VipPrice() + "</b>" + Sig();
+            if(TgSendEx(PublicChannelId, txt2, VipButtons(), 0) > 0) ContentMark();
+           }
+        }
+     }
+  }
+
+void PollPosts()
+  {
+   if(!SendToPublic) return;
+   datetime ist = NowIST();
+   if(TimeMinute(ist) > 30) return;
+   string hrs[];
+   int nh = StringSplit(PollHoursIST, ',', hrs);
+   for(int i = 0; i < nh; i++)
+     {
+      if((int)StringToInteger(TrimStr(hrs[i])) != TimeHour(ist)) continue;
+      string key = "POLL_" + DateKey() + "_" + IntegerToString(TimeHour(ist));
+      if(GlobalVariableCheck(MsgSentGV(key, PublicChannelId)) || !ContentSlotFree(false)) return;
+      bool wk = IsWeekendIST();
+      int pick = (TimeDayOfYear(ist) + i) % 3;
+      string q = (wk || pick == 1) ? "BITCOIN - next 1 hour?" : ((pick == 0) ? "GOLD - next 1 hour?" : "ETHEREUM - next 1 hour?");
+      if(TgPoll(PublicChannelId, Emo(0x1F4CA) + " " + q, Emo(0x1F4C8) + " Up", Emo(0x1F4C9) + " Down", Emo(0x1F937) + " Sideways"))
+        {
+         GlobalVariableSet(MsgSentGV(key, PublicChannelId), (double)TimeCurrent());
+         ContentMark();
+        }
+      return;
+     }
+  }
+
+//------------------------------------------------------------------
+// ADMIN ALERTS + HEARTBEAT
+//------------------------------------------------------------------
+void AdminAlerts()
+  {
+   string dk = DateKey();
+   double bal = AccountBalance();
+   if(AlertDayLossPct > 0 && bal > 0)
+     {
+      double dpl = DayPLAll();
+      if(dpl < 0 && -dpl >= AlertDayLossPct / 100.0 * bal && !GlobalVariableCheck(TgGV("DL" + dk)))
+        {
+         GVSet(TgGV("DL" + dk), 1);
+         TgSend(AdminChatId, Emo(0x1F6A8) + " <b>DAILY LOSS ALERT</b>\n" + Divider() + "\nClosed result today: <b>" + Usd(dpl) + " USD</b> (" + DoubleToString(100.0 * dpl / bal, 1) + "% of the balance)." +
+                "\nOpen trades: " + IntegerToString(CountAKOpen()) + " | equity " + DoubleToString(AccountEquity(), 2) + "\nUse /pauseall to stop new entries, /closeall to close everything.");
+        }
+     }
+   if(AlertMarginLevel > 0 && AccountMargin() > 0)
+     {
+      double ml = 100.0 * AccountEquity() / AccountMargin();
+      if(ml < AlertMarginLevel && TimeLocal() - (datetime)GVGet(TgGV("ML"), 0) > 2 * 3600)
+        {
+         GVSet(TgGV("ML"), (double)TimeLocal());
+         TgSend(AdminChatId, Emo(0x26A0) + " <b>MARGIN LEVEL LOW: " + DoubleToString(ml, 0) + "%</b>\nEquity " + DoubleToString(AccountEquity(), 2) + " | margin " + DoubleToString(AccountMargin(), 2) + " | open trades " + IntegerToString(CountAKOpen()));
+        }
+     }
+  }
+
+void Heartbeat()
+  {
+   if(HeartbeatHours <= 0) return;
+   if(TimeLocal() - (datetime)GVGet(TgGV("HB"), 0) < HeartbeatHours * 3600) return;
+   GVSet(TgGV("HB"), (double)TimeLocal());
+   string syms[];
+   int n = RunningSymbols(syms);
+   string list = "";
+   for(int i = 0; i < n; i++) list += ((i > 0) ? ", " : "") + syms[i] + ((GVGet(PauseGV(syms[i]), 0) > 0 || GVGet(PauseGV("ALL"), 0) > 0) ? " (paused)" : "");
+   TgSend(AdminChatId, Emo(0x1F49A) + " <b>Running</b> - " + IntegerToString(n) + " chart(s): " + HtmlEsc(list) + "\nOpen trades " + IntegerToString(CountAKOpen()) +
+          " | balance " + DoubleToString(AccountBalance(), 2) + " | equity " + DoubleToString(AccountEquity(), 2) + " | today " + Usd(DayPLAll()) + " USD");
+  }
+
+//------------------------------------------------------------------
+// PAUSE / CLOSE ALL (commands; every chart obeys through global variables)
+//------------------------------------------------------------------
+string PauseGV(string sym) { return (IsTesting() ? "AK10QP_" : "AK10P_") + sym; }
+bool   SymbolPaused() { return (GVGet(PauseGV(_Symbol), 0) > 0 || GVGet(PauseGV("ALL"), 0) > 0); }
+datetime g_closeAllSeen = 0;
+
+void CloseAllCheck()
+  {
+   datetime t = (datetime)GVGet(IsTesting() ? "AK10QX" : "AK10X", 0);
+   if(t <= 0 || t <= g_closeAllSeen) return;
+   if(g_closeAllSeen == 0 && TimeLocal() - t > 300) { g_closeAllSeen = t; return; }   // an old request from before this start
+   g_closeAllSeen = t;
+   int n = 0;
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+     {
+      if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
+      if(!MyOrder()) continue;
+      int dir = (OrderType() == OP_BUY) ? 1 : -1;
+      CloseTrade(OrderTicket(), dir, OrderKey(), CR_MANUAL);
+      n++;
+     }
+   if(n > 0) Print("[AK10] /closeall: closed ", n, " trade(s) on ", _Symbol);
+  }
+
+//------------------------------------------------------------------
+// COMMANDS (admin chat only; one chart reads them)
+//------------------------------------------------------------------
+string SettingsText()
+  {
+   return Emo(0x2699) + " <b>SETTINGS</b>\n" + Divider() +
+          "\nSymbols: gold " + (TradeGold ? "ON" : "OFF") + ", BTC " + (TradeBTC ? "ON" : "OFF") + ", ETH " + (TradeETH ? "ON" : "OFF") + ", oil " + (TradeOil ? "ON" : "OFF") + ", EUR " + (TradeEUR ? "ON" : "OFF") +
+          "\nPullback " + (UsePullback ? "ON" : "OFF") + " (gold " + ((GoldPullbackMode == GM_OFF) ? "OFF" : ((GoldPullbackMode == GM_SMALL) ? "SMALL" : "NORMAL")) + ") | Breakout " + (UseBreakout ? "ON" : "OFF") +
+          " | Trend " + (UseTrendMethod ? "ON" : "OFF") + " | Memory " + MemModeShort() + " (gold " + ((GoldMemoryMode == GM_OFF) ? "OFF" : ((GoldMemoryMode == GM_SMALL) ? "SMALL" : "NORMAL")) + ")" +
+          "\nLots: gold " + DoubleToString(LotGold, 2) + ", BTC " + ((BTCRiskPct > 0) ? "risk " + DoubleToString(BTCRiskPct, 2) + "%" : DoubleToString(LotBTC, 2)) + ", ETH " + DoubleToString(LotETH, 2) +
+          "\nMax trades: " + IntegerToString(MaxTradesPerSymbol) + " per symbol, " + IntegerToString(MaxOpenAccount) + " on the account" +
+          "\nNews filter " + (UseNewsFilter ? "ON" : "OFF") + " | setup alerts " + (SendSetupAlerts ? "ON" : "OFF") + " | promos " + (PromotionsEnabled ? "every " + IntegerToString(PromoIntervalMin) + " min" : "OFF");
+  }
+
+void HandleUpdate(string seg)
+  {
+   string text = JsonValue(seg, "text", 0);
+   int cp = StringFind(seg, "\"chat\":{\"id\":");
+   if(cp < 0 || text == "") return;
+   string chat = JsonValue(seg, "id", cp + 8);
+   if(chat != AdminChatId) return;                                    // only the admin may use the commands
+   string cmd = text;
+   StringToLower(cmd);
+   cmd = TrimStr(cmd);
+   if(StringFind(cmd, "/report") == 0 || StringFind(cmd, "/today") == 0) TgSend(chat, ReportText(DateKey()));
+   else if(StringFind(cmd, "/status") == 0 || StringFind(cmd, "/open") == 0) TgSend(chat, StatusText());
+   else if(StringFind(cmd, "/news") == 0) TgSend(chat, NewsListText());
+   else if(StringFind(cmd, "/week") == 0) { ClosedStats(NowIST() - 7 * 86400); TgSend(chat, ScoreText(Emo(0x1F5D3) + " <b>LAST 7 DAYS</b>", false) + "\nNet " + Usd(g_csNet) + " USD | " + Sparkline(7)); }
+   else if(StringFind(cmd, "/month") == 0) { ClosedStats(NowIST() - 30 * 86400); TgSend(chat, ScoreText(Emo(0x1F5D3) + " <b>LAST 30 DAYS</b>", false) + "\nNet " + Usd(g_csNet) + " USD | " + Sparkline(30)); }
+   else if(StringFind(cmd, "/balance") == 0) TgSend(chat, Emo(0x1F4B0) + " Balance <b>" + DoubleToString(AccountBalance(), 2) + "</b> | equity " + DoubleToString(AccountEquity(), 2) + " " + AccountCurrency() + " | today " + Usd(DayPLAll()) + " USD | open " + IntegerToString(CountAKOpen()));
+   else if(StringFind(cmd, "/settings") == 0) TgSend(chat, SettingsText());
+   else if(StringFind(cmd, "/pauseall") == 0) { GVSet(PauseGV("ALL"), 1); TgSend(chat, Emo(0x23F8) + " All charts: no new entries until /resumeall. Open trades keep being managed."); }
+   else if(StringFind(cmd, "/resumeall") == 0) { GVSet(PauseGV("ALL"), 0); TgSend(chat, Emo(0x25B6) + " All charts: new entries allowed again."); }
+   else if(StringFind(cmd, "/pause ") == 0 || StringFind(cmd, "/resume ") == 0)
+     {
+      bool pz = (StringFind(cmd, "/pause ") == 0);
+      string sym = TrimStr(StringSubstr(text, pz ? 7 : 8));
+      StringToUpper(sym);
+      string syms[];
+      int n = RunningSymbols(syms), hit = 0;
+      for(int i = 0; i < n; i++)
+        {
+         string u = syms[i];
+         StringToUpper(u);
+         if(StringFind(u, sym) >= 0) { GVSet(PauseGV(syms[i]), pz ? 1 : 0); hit++; TgSend(chat, (pz ? Emo(0x23F8) + " Paused: " : Emo(0x25B6) + " Resumed: ") + syms[i]); }
+        }
+      if(hit == 0) TgSend(chat, "No running chart matches \"" + sym + "\".");
+     }
+   else if(StringFind(cmd, "/closeall") == 0)
+     {
+      if(StringFind(cmd, "confirm") >= 0 && TimeLocal() - (datetime)GVGet(TgGV("CAQ"), 0) <= 60)
+        {
+         GVSet("AK10X", (double)TimeLocal());
+         GVSet(TgGV("CAQ"), 0);
+         TgSend(chat, Emo(0x1F6D1) + " Closing ALL trades on all charts now.");
+        }
+      else
+        {
+         GVSet(TgGV("CAQ"), (double)TimeLocal());
+         TgSend(chat, Emo(0x26A0) + " This closes <b>every open trade</b> on all charts. Send <code>/closeall confirm</code> within 60 seconds to do it.");
+        }
+     }
+   else if(StringFind(cmd, "/start") == 0 || StringFind(cmd, "/help") == 0)
+      TgSend(chat, "<b>Commands</b>\n/today - today's report\n/week, /month - results\n/open - open trades\n/balance - balance and today\n/news - big news of the next 7 days\n/pause GOLD, /resume GOLD - one symbol\n/pauseall, /resumeall - all charts\n/closeall - close everything (asks to confirm)\n/settings - main settings");
+  }
+
+bool ElectMaster()
+  {
+   if(!g_tg) return false;
+   string n = "AK10TG_M", h = "AK10TG_H";
+   double me = (double)ChartID();
+   double cur = GVGet(n, 0);
+   datetime hb = (datetime)GVGet(h, 0);
+   if(cur == me || cur == 0 || TimeLocal() - hb > 30)
+     {
+      if(cur != me)
+        {
+         GlobalVariableSet(n, me);
+         GlobalVariableSet(h, (double)TimeLocal());
+         Sleep(200);
+         if(GVGet(n, 0) != me) return false;
+         Print("[TG] This chart (", _Symbol, ") now sends the reports / promos and reads the Telegram commands.");
+        }
+      GlobalVariableSet(h, (double)TimeLocal());
+      return true;
+     }
+   return false;
+  }
+
+void TgPollUpdates()
+  {
+   if(!g_tg || !g_tgMaster || g_tgUrlErr || !EnableCommands) return;
+   if(TimeLocal() < (datetime)GVGet("AK10TG_BO", 0)) return;
+   double off = GVGet("AK10TG_OFF", 0);
+   string url = TgApi("getUpdates") + "?timeout=0&limit=20&allowed_updates=%5B%22message%22%5D";
+   if(off > 0) url += "&offset=" + DoubleToString(off, 0);
+   string resp = "";
+   int code = HttpRequest("GET", url, "", resp);
+   if(code != 200)
+     {
+      if(code == 409)
+        {
+         //--- another program / webhook reads this bot: sending still works; the webhook is NEVER deleted
+         GVSet("AK10TG_BO", (double)(TimeLocal() + 600));
+         if(TimeLocal() - (datetime)GVGet("AK10TG_E409", 0) >= 86400)
+           {
+            GVSet("AK10TG_E409", (double)TimeLocal());
+            Print("[TG] 409: another program or webhook reads this bot - commands are handled there. Messages still work.");
+           }
+        }
+      return;
+     }
+   string marker = "{\"update_id\":";
+   int ml = StringLen(marker);
+   int pos = 0;
+   while(true)
+     {
+      int p = StringFind(resp, marker, pos);
+      if(p < 0) break;
+      int nx = StringFind(resp, marker, p + ml);
+      string seg = (nx > 0) ? StringSubstr(resp, p, nx - p) : StringSubstr(resp, p);
+      double uid = StringToDouble(JsonValue(seg, "update_id", 0));
+      if(uid > 0 && uid + 1 > off)
+        {
+         off = uid + 1;
+         GlobalVariableSet("AK10TG_OFF", off);
+         HandleUpdate(seg);
+        }
+      pos = p + ml;
+     }
+  }
+
+//--- every chart: registry + pause / close-all; the master: commands, reports, promos and content
+void TelegramTick()
+  {
+   GVSet((TgPreviewOn() ? "AK10QR_" : "AK10R_") + _Symbol, (double)TimeLocal());
+   CloseAllCheck();
+   if(!g_tg && !TgPreviewOn()) return;
+   g_tgMaster = TgPreviewOn() ? true : ElectMaster();
+   if(!g_tgMaster) return;
+   TgPollUpdates();
+   DailyReportTick();
+   WeeklyMonthlyTick();
+   NewsAlertTick();
+   AdminAlerts();
+   Heartbeat();
+   if(UseContentManager) { SessionPosts(); MorningPost(); PollPosts(); }
+   Promotions();
+  }
+//==================================================================
+// INSTAGRAM EXPORT (v10.3): small data files for the "Insta Autopilot" program on this PC (MQL4\Files\insta\).
+// state_<SYMBOL>.json every 5 minutes (market, levels, news, open trades) and ev_*.json for every setup alert, entry,
+// first target and exit (+ a chart picture at entry and exit). The program turns them into Hindi reels / posts / stories.
+// Nothing here touches the trading.
+//==================================================================
+bool InstaOn() { return IsTesting() ? TgPreviewOn() : InstagramExport; }
+
+string JsEsc(string s)
+  {
+   StringReplace(s, "\\", "\\\\");
+   StringReplace(s, "\"", "\\\"");
+   StringReplace(s, "\r", " ");
+   StringReplace(s, "\n", " ");
+   return s;
+  }
+string JsS(string k, string v) { return "\"" + k + "\":\"" + JsEsc(v) + "\""; }
+string JsN(string k, double v, int d) { return "\"" + k + "\":" + DoubleToString(v, d); }
+
+void InstaWrite(string name, string js)
+  {
+   int h = FileOpen("insta\\" + name, FILE_WRITE | FILE_TXT | FILE_ANSI);
+   if(h == INVALID_HANDLE) return;
+   FileWriteString(h, js);
+   FileClose(h);
+  }
+
+int g_insSeq = 0;
+string InstaStamp()
+  {
+   datetime t = NowIST();
+   g_insSeq++;
+   return StringFormat("%04d%02d%02d_%02d%02d%02d_%03d", TimeYear(t), TimeMonth(t), TimeDay(t), TimeHour(t), TimeMinute(t), TimeSeconds(t), g_insSeq % 1000);
+  }
+
+//--- an entry / first target / exit of a trade (kind: open, partial, close)
+void InstaEvent(string kind, long key, double px, double resR, string reason)
+  {
+   if(!InstaOn()) return;
+   int dir = (int)PGet(key, "DIR", 0);
+   int ly = (int)PGet(key, "LAY", LY_H1), fm = (int)PGet(key, "FAM", FM_TPB);
+   int tf = (ly == LY_MEM) ? (((int)PGet(key, "MTF", 15) == 15) ? PERIOD_M15 : PERIOD_H1) : LayerTf(ly);
+   double en = PGet(key, "EN", 0), sl = PGet(key, "SL0", 0), R = PGet(key, "R", 0);
+   string st = InstaStamp();
+   string photo = "";
+   if(kind == "open" || kind == "close")
+     {
+      string pf = "insta\\chart_" + st + "_" + _Symbol + "_" + kind + ".png";
+      InstaWrite("_folder.txt", "insta");                                // makes sure the folder exists before the picture
+      if(ShotChart("I" + IntegerToString(key), (kind == "close") ? en : 0, (kind == "close") ? px : 0, pf) != "") photo = StringSubstr(pf, 6);
+     }
+   string js = "{" + JsS("kind", kind) + "," + JsS("symbol", _Symbol) + "," + JsS("nice", SymNice(_Symbol)) + "," + JsS("side", SideName(dir)) + "," +
+               JsS("setup", ProSetupTitle(ly, fm, dir)) + "," + JsS("tf", ProTf(tf)) + "," + JsS("time_ist", IstStamp(TimeCurrent())) + "," +
+               JsS("entry", Px(en)) + "," + JsS("sl", Px(sl)) + "," + JsS("tp1", (R > 0) ? Px(en + dir * PartialAtR * R) : "") + "," +
+               JsS("price", (px > 0) ? Px(px) : "") + "," + JsN("result_r", resR, 2) + "," + JsS("move", (px > 0 && en > 0) ? MoveText(dir * (px - en)) : "") + "," +
+               JsS("reason", reason) + "," + JsS("photo", photo) + "," + JsS("trend", TrendWord(TrendOf(PERIOD_D1)) + "/" + TrendWord(TrendOf(PERIOD_H4)) + "/" + TrendWord(TrendOf(PERIOD_H1))) + "}";
+   InstaWrite("ev_" + st + "_" + _Symbol + "_" + kind + ".json", js);
+  }
+
+//--- a "setup loading" moment (same moments as the Telegram alert, also when Telegram is off)
+void InstaSetup(int dir, string what, double lvl, string need)
+  {
+   if(!InstaOn()) return;
+   string js = "{" + JsS("kind", "setup") + "," + JsS("symbol", _Symbol) + "," + JsS("nice", SymNice(_Symbol)) + "," + JsS("side", SideName(dir)) + "," +
+               JsS("what", what) + "," + JsS("level", Px(lvl)) + "," + JsS("need", need) + "," + JsS("time_ist", IstStamp(TimeCurrent())) + "," +
+               JsS("trend", TrendWord(TrendOf(PERIOD_D1)) + "/" + TrendWord(TrendOf(PERIOD_H4)) + "/" + TrendWord(TrendOf(PERIOD_H1))) + "}";
+   InstaWrite("ev_" + InstaStamp() + "_" + _Symbol + "_setup.json", js);
+  }
+
+//--- the market of this chart now (every 5 minutes)
+datetime g_insState = 0;
+void InstaState()
+  {
+   if(!InstaOn()) return;
+   if(g_insState > 0 && TimeLocal() - g_insState < 300) return;
+   g_insState = TimeLocal();
+   RefreshRates();
+   double ph = Hi(PERIOD_D1, 1), pl = Lo(PERIOD_D1, 1);
+   int kh = iHighest(_Symbol, PERIOD_H1, MODE_HIGH, 20, 1), kl = iLowest(_Symbol, PERIOD_H1, MODE_LOW, 20, 1);
+   string nm = "";
+   datetime ev = 0;
+   bool news = (UseNewsFilter && NewsSoon(24 * 60, nm, ev));
+   string trades = "";
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+     {
+      if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
+      if(!MyOrder()) continue;
+      long key = OrderKey();
+      int dir = (OrderType() == OP_BUY) ? 1 : -1;
+      double R = PGet(key, "R", 0), en = OrderOpenPrice();
+      double curR = (R > 0) ? dir * (((dir > 0) ? Bid : Ask) - en) / R : 0;
+      trades += ((trades != "") ? "," : "") + "{" + JsS("side", SideName(dir)) + "," + JsS("entry", Px(en)) + "," + JsS("sl", Px(OrderStopLoss())) + "," + JsN("r_now", curR, 2) + "," +
+                JsS("risk_free", (OrderStopLoss() > 0 && dir * (OrderStopLoss() - en) >= 0) ? "yes" : "no") + "}";
+     }
+   string js = "{" + JsS("symbol", _Symbol) + "," + JsS("nice", SymNice(_Symbol)) + "," + JsS("time_ist", IstStamp(TimeCurrent())) + "," + JsS("price", Px(Bid)) + "," +
+               JsS("d1", TrendWord(TrendOf(PERIOD_D1))) + "," + JsS("h4", TrendWord(TrendOf(PERIOD_H4))) + "," + JsS("h1", TrendWord(TrendOf(PERIOD_H1))) + "," +
+               JsS("bias", (TrendSide() > 0) ? "BUY" : ((TrendSide() < 0) ? "SELL" : "WAIT")) + "," + JsS("volatility", BandName(VolBand())) + "," +
+               JsS("yday_high", (ph > 0) ? Px(ph) : "") + "," + JsS("yday_low", (pl > 0) ? Px(pl) : "") + "," +
+               JsS("h1_high", (kh >= 0) ? Px(Hi(PERIOD_H1, kh)) : "") + "," + JsS("h1_low", (kl >= 0) ? Px(Lo(PERIOD_H1, kl)) : "") + "," +
+               JsS("ema20_h1", Px(EMAv(PERIOD_H1, 20, 0))) + "," + JsS("news", news ? nm : "") + "," + JsS("news_ist", news ? TimeToString(ev + 19800, TIME_DATE | TIME_MINUTES) : "") + "," +
+               JsS("watch", g_swTxt) + ",\"open\":[" + trades + "]}";
+   InstaWrite("state_" + _Symbol + ".json", js);
+  }
+//==================================================================
+// CHOP GUARD + LOSS BRAKE - a smaller lot in a choppy / sideways market and after a losing streak (never a bigger lot)
+//==================================================================
+double   g_chEff = -1;
+int      g_chCross = 0;
+bool     g_chRel = false;
+datetime g_chBar = 0;
+
+bool ChopGuardHere()
+  {
+   if(g_cls == SC_GOLD) return ChopGuardGold;
+   if(g_cls == SC_BTC) return ChopGuardBTC;
+   if(g_cls == SC_ETH) return ChopGuardETH;
+   if(g_cls == SC_OIL) return ChopGuardOil;
+   return ChopGuardEUR;
+  }
+
+bool LossBrakeHere()
+  {
+   if(g_cls == SC_GOLD) return LossBrakeGold;
+   if(g_cls == SC_BTC) return LossBrakeBTC;
+   if(g_cls == SC_ETH) return LossBrakeETH;
+   if(g_cls == SC_OIL) return LossBrakeOil;
+   return LossBrakeEUR;
+  }
+
+//--- choppiness of the last 24 completed H1 candles (once per H1 candle)
+void ChopCalc()
+  {
+   datetime b = iTime(_Symbol, PERIOD_H1, 0);
+   if(b == g_chBar) return;
+   g_chBar = b;
+   g_chEff = -1; g_chCross = 0; g_chRel = false;
+   if(iBars(_Symbol, PERIOD_H1) < 80) return;
+   double path = 0;
+   for(int i = 1; i <= 24; i++) path += MathAbs(Cl(PERIOD_H1, i) - Cl(PERIOD_H1, i + 1));
+   g_chEff = (path > 0) ? MathAbs(Cl(PERIOD_H1, 1) - Cl(PERIOD_H1, 25)) / path : 1.0;
+   int prev = 0;
+   for(int k = 25; k >= 1; k--)
+     {
+      int sd = (Cl(PERIOD_H1, k) > EMAv(PERIOD_H1, 20, k)) ? 1 : -1;
+      if(prev != 0 && sd != prev) g_chCross++;
+      prev = sd;
+     }
+   //--- a fresh breakout of the 24-candle range with a strong close ends the choppy mode at once
+   for(int k = 1; k <= ChopReleaseBars && !g_chRel; k++)
+     {
+      double hh = Hi(PERIOD_H1, k + 1), ll = Lo(PERIOD_H1, k + 1);
+      for(int j = k + 2; j <= k + 24; j++) { hh = MathMax(hh, Hi(PERIOD_H1, j)); ll = MathMin(ll, Lo(PERIOD_H1, j)); }
+      double h = Hi(PERIOD_H1, k), l = Lo(PERIOD_H1, k), c = Cl(PERIOD_H1, k), rg = h - l;
+      if(rg <= 0) continue;
+      if(c > hh && c >= h - rg / 3.0) g_chRel = true;
+      if(c < ll && c <= l + rg / 3.0) g_chRel = true;
+     }
+  }
+
+bool ChopNow()
+  {
+   ChopCalc();
+   return (g_chEff >= 0 && g_chEff < ChopMaxEff && g_chCross >= ChopMinCross && !g_chRel);
+  }
+
+string LossStreakName() { return g_SP + "LB_" + _Symbol; }
+int LossStreak() { return (int)GVGet(LossStreakName(), 0); }
+
+//--- called when a trade closes: count the losses in a row (a break-even trade does not change it)
+void LossStreakAdd(double resR)
+  {
+   if(resR < -0.05) GVSet(LossStreakName(), LossStreak() + 1);
+   else if(resR > 0.05) GVSet(LossStreakName(), 0);
+  }
+
+//--- lot after the guard (0 = skip the trade); note says why it changed
+double GuardLots(double lots, int d, string &note)
+  {
+   note = "";
+   double f = 1.0;
+   bool chop = false, brake = false;
+   if(ChopGuardHere() && ChopNow())
+     {
+      bool strong = ChopFullLotAligned && TrendOf(PERIOD_D1) == d && TrendOf(PERIOD_H4) == d && TrendOf(PERIOD_H1) == d;
+      if(!strong) { chop = true; f = MathMin(f, ChopLotFactor); }
+     }
+   if(LossBrakeHere() && LossStreak() >= LossBrakeAfter) { brake = true; f = MathMin(f, LossBrakeFactor); }
+   if(chop && brake && LossBrakeSkipChop) { note = "choppy market and " + IntegerToString(LossStreak()) + " losses in a row"; return 0; }
+   if(f >= 1.0) return lots;
+   note = chop ? (brake ? "choppy market + losing streak: smaller lot" : "choppy market: smaller lot") : "losing streak: smaller lot";
+   return NormLot(lots * f);
+  }
+//==================================================================
+// PANEL (v10.3): small and clean - account, market, signals, open trades, last trades + buttons.
+// [-] minimise, [i] details (history, scoreboard, ATR, Telegram), PAUSE (this symbol), CLOSE (this symbol, asks twice).
+// Refreshed once per second, never on every tick. Objects start with AK10_PN_ so the chart photo can hide them.
+//==================================================================
+#define PNL      "AK10_PN_"
+#define PNL_W    300
+#define PNL_X    6
+#define PNL_Y    20
+#define PNL_LH   14
+#define PNL_CH   46                       // characters per line (Consolas 8)
+
+color CLR_BG = C'17,21,33';
+color CLR_HEAD = C'27,33,52';
+color CLR_LINE = C'52,62,88';
+color CLR_TXT = C'206,212,224';
+color CLR_MUTED = C'128,138,160';
+color CLR_UP = C'0,196,120';
+color CLR_DN = C'238,84,84';
+color CLR_GOLD = C'250,198,70';
+color CLR_AQUA = C'92,188,255';
+
+bool     g_pnMin = false;
+bool     g_pnDet = false;
+datetime g_pnCloseArm = 0;
+string   g_lx[3];                          // last 3 exits of this chart (panel)
+int      g_lxR[3];                         // +1 profit / 0 even / -1 loss
+
+string PnGV(string f) { return (IsTesting() ? "AK10QPN_" : "AK10PN_") + _Symbol + "_" + f; }
+
+void PanelLoadState()
+  {
+   g_pnMin = (GVGet(PnGV("MIN"), 0) > 0);
+   g_pnDet = (GVGet(PnGV("DET"), 0) > 0);
+  }
+
+void PanelHide() { DeleteObjects(PNL); }
+
+void DeleteObjects(string prefix)
+  {
+   for(int i = ObjectsTotal(0, 0, -1) - 1; i >= 0; i--)
+     {
+      string nm = ObjectName(0, i, 0, -1);
+      if(StringFind(nm, prefix) == 0) ObjectDelete(0, nm);
+     }
+  }
+
+//--- SPEED: the panel is refreshed every second; an object is only written to when something about it changed
+//--- (MT4 redraws the chart for every object change - with 5 charts that was most of the CPU)
+string g_pcN[];
+string g_pcV[];
+int    g_pcC = 0;
+bool PnSame(string nm, string v, bool exists)
+  {
+   for(int i = 0; i < g_pcC; i++)
+      if(g_pcN[i] == nm)
+        {
+         if(exists && g_pcV[i] == v) return true;
+         g_pcV[i] = v;
+         return false;
+        }
+   ArrayResize(g_pcN, g_pcC + 1);
+   ArrayResize(g_pcV, g_pcC + 1);
+   g_pcN[g_pcC] = nm;
+   g_pcV[g_pcC] = v;
+   g_pcC++;
+   return false;
+  }
+
+void PnRect(string nm, int x, int y, int w, int h, color bg, color border)
+  {
+   bool ex = (ObjectFind(0, nm) >= 0);
+   if(PnSame(nm, IntegerToString(x) + "|" + IntegerToString(y) + "|" + IntegerToString(w) + "|" + IntegerToString(h) + "|" + IntegerToString(bg) + "|" + IntegerToString(border), ex)) return;
+   if(!ex)
+     {
+      ObjectCreate(0, nm, OBJ_RECTANGLE_LABEL, 0, 0, 0);
+      ObjectSetInteger(0, nm, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetInteger(0, nm, OBJPROP_BORDER_TYPE, BORDER_FLAT);
+      ObjectSetInteger(0, nm, OBJPROP_BACK, 0);
+      ObjectSetInteger(0, nm, OBJPROP_SELECTABLE, 0);
+      ObjectSetInteger(0, nm, OBJPROP_HIDDEN, 1);
+     }
+   ObjectSetInteger(0, nm, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, nm, OBJPROP_YDISTANCE, y);
+   ObjectSetInteger(0, nm, OBJPROP_XSIZE, w);
+   ObjectSetInteger(0, nm, OBJPROP_YSIZE, h);
+   ObjectSetInteger(0, nm, OBJPROP_BGCOLOR, bg);
+   ObjectSetInteger(0, nm, OBJPROP_COLOR, border);
+  }
+
+void PnText(string nm, int x, int y, string txt, color c, int size, string font)
+  {
+   bool ex = (ObjectFind(0, nm) >= 0);
+   if(PnSame(nm, IntegerToString(x) + "|" + IntegerToString(y) + "|" + IntegerToString(c) + "|" + IntegerToString(size) + "|" + font + "|" + txt, ex)) return;
+   if(!ex)
+     {
+      ObjectCreate(0, nm, OBJ_LABEL, 0, 0, 0);
+      ObjectSetInteger(0, nm, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetInteger(0, nm, OBJPROP_ANCHOR, ANCHOR_LEFT_UPPER);
+      ObjectSetInteger(0, nm, OBJPROP_SELECTABLE, 0);
+      ObjectSetInteger(0, nm, OBJPROP_HIDDEN, 1);
+     }
+   ObjectSetInteger(0, nm, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, nm, OBJPROP_YDISTANCE, y);
+   ObjectSetString(0, nm, OBJPROP_FONT, font);
+   ObjectSetInteger(0, nm, OBJPROP_FONTSIZE, size);
+   ObjectSetInteger(0, nm, OBJPROP_COLOR, c);
+   ObjectSetString(0, nm, OBJPROP_TEXT, txt);
+  }
+
+void PnButton(string nm, int x, int y, int w, int h, string txt, color bg, color fg)
+  {
+   bool ex = (ObjectFind(0, nm) >= 0);
+   if(PnSame(nm, IntegerToString(x) + "|" + IntegerToString(y) + "|" + IntegerToString(w) + "|" + IntegerToString(h) + "|" + IntegerToString(bg) + "|" + IntegerToString(fg) + "|" + txt, ex)) return;
+   if(!ex)
+     {
+      ObjectCreate(0, nm, OBJ_BUTTON, 0, 0, 0);
+      ObjectSetInteger(0, nm, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetInteger(0, nm, OBJPROP_SELECTABLE, 0);
+      ObjectSetInteger(0, nm, OBJPROP_HIDDEN, 1);
+      ObjectSetString(0, nm, OBJPROP_FONT, "Segoe UI Semibold");
+      ObjectSetInteger(0, nm, OBJPROP_FONTSIZE, 7);
+     }
+   ObjectSetInteger(0, nm, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, nm, OBJPROP_YDISTANCE, y);
+   ObjectSetInteger(0, nm, OBJPROP_XSIZE, w);
+   ObjectSetInteger(0, nm, OBJPROP_YSIZE, h);
+   ObjectSetInteger(0, nm, OBJPROP_BGCOLOR, bg);
+   ObjectSetInteger(0, nm, OBJPROP_BORDER_COLOR, CLR_LINE);
+   ObjectSetInteger(0, nm, OBJPROP_COLOR, fg);
+   ObjectSetInteger(0, nm, OBJPROP_STATE, 0);
+   ObjectSetString(0, nm, OBJPROP_TEXT, txt);
+  }
+
+//--- the panel is built as a list of rows: kind 0 = text line, 1 = section header, 2 = spacer
+string g_prT[];
+color  g_prC[];
+int    g_prK[];
+int    g_prN = 0;
+void PRow(int kind, string txt, color c)
+  {
+   if(kind == 0 && StringLen(txt) > PNL_CH)
+     {
+      //--- wrap long lines (continuation indented), at most 2 lines per row - the panel stays small
+      string rest = txt;
+      int line = 0;
+      while(StringLen(rest) > 0 && line < 2)
+        {
+         int w = (line == 0) ? PNL_CH : PNL_CH - 2;
+         int cut = StringLen(rest);
+         if(cut > w)
+           {
+            cut = w;
+            for(int k = w; k > w / 2; k--) if(StringGetCharacter(rest, k) == ' ') { cut = k; break; }
+           }
+         string part = StringSubstr(rest, 0, cut);
+         rest = TrimStr(StringSubstr(rest, cut));
+         if(line == 1 && StringLen(rest) > 0) part = StringSubstr(part, 0, MathMax(0, StringLen(part) - 2)) + "..";
+         PRow(3, ((line == 0) ? "" : "  ") + part, c);
+         line++;
+        }
+      return;
+     }
+   ArrayResize(g_prT, g_prN + 1);
+   ArrayResize(g_prC, g_prN + 1);
+   ArrayResize(g_prK, g_prN + 1);
+   g_prT[g_prN] = txt;
+   g_prC[g_prN] = c;
+   g_prK[g_prN] = (kind == 3) ? 0 : kind;
+   g_prN++;
+  }
+
+string Arr3(int t) { return (t > 0) ? "UP" : ((t < 0) ? "DN" : "--"); }   // plain letters: MT4 label fonts show the arrow symbols as "?"
+string Short(string s, int n) { return (StringLen(s) > n) ? StringSubstr(s, 0, n - 2) + ".." : s; }
+string Money(double v) { return ((v >= 0) ? "+" : "") + DoubleToString(v, 2); }
+
+//--- how long until a UTC time, e.g. "2h 10m"
+string Until(datetime ev)
+  {
+   int s = (int)(ev - NowUTC());                                       // ev is UTC (news list)
+   if(s <= 0) return "now";
+   int h = s / 3600, m = (s % 3600) / 60;
+   return (h > 0) ? IntegerToString(h) + "h " + IntegerToString(m) + "m" : IntegerToString(m) + "m";
+  }
+
+//--- the reason no trade is being taken right now (panel)
+string WhyNoTrade()
+  {
+   if(!g_canTrade) return g_block;
+   if(SymbolPaused()) return "paused from Telegram / the panel (resume to trade)";
+   if(!SymbolSupported()) return SymbolOffText();
+   string tb = "";
+   if(TimeBlock(tb)) return tb;
+   if(TrendSide() == 0) return "D1 and H4 trends disagree - waiting for them to line up";
+   if(!InSession()) return "outside the trading session (" + TrimStr(SessionSpec()) + " IST)";
+   if(CountMyOpen(-1) >= MaxTradesPerSymbol) return "max " + IntegerToString(MaxTradesPerSymbol) + " trades open on " + _Symbol;
+   if(g_lastSkip != "" && TimeCurrent() - g_lastSkipT < 3600) return "last signal skipped: " + g_lastSkip;
+   return "";
+  }
+
+void UpdatePanel()
+  {
+   if(!ShowPanel) return;
+   if(IsTesting() && !IsVisualMode()) return;
+   g_lastPanel = TimeLocal();
+   g_prN = 0;
+   ArrayResize(g_prT, 0);
+   ArrayResize(g_prC, 0);
+   ArrayResize(g_prK, 0);
+   //--- header chip
+   string chip = "ACTIVE";
+   color chipC = CLR_UP;
+   if(!g_canTrade) { chip = "BLOCKED"; chipC = CLR_DN; }
+   else if(SymbolPaused()) { chip = "PAUSED"; chipC = CLR_GOLD; }
+   else if(!SymbolSupported()) { chip = "OFF"; chipC = CLR_MUTED; }
+   string mode = IsTesting() ? "TEST" : (IsDemo() ? "DEMO" : "LIVE");
+   if(!g_pnMin)
+     {
+      double bal = AccountBalance(), eq = AccountEquity(), pk = EquityPeak();
+      string pre = g_SP + DateKey() + "_" + _Symbol;
+      PRow(0, "Balance " + DoubleToString(bal, 2) + "   Equity " + DoubleToString(eq, 2), CLR_TXT);
+      double dd = (pk > 0) ? 100.0 * (pk - eq) / pk : 0;
+      PRow(0, "Today " + Money(DayPLAll()) + " USD (" + IntegerToString((int)GVGet(pre + "_N", 0)) + " closed here)   DD " + DoubleToString(dd, 1) + "%", (DayPLAll() >= 0) ? CLR_UP : CLR_DN);
+      //--- MARKET
+      PRow(1, "MARKET", CLR_AQUA);
+      int ts = TrendSide();
+      PRow(0, "Trend  D1 " + Arr3(TrendOf(PERIOD_D1)) + "  H4 " + Arr3(TrendOf(PERIOD_H4)) + "  H1 " + Arr3(TrendOf(PERIOD_H1)) + "   " + ((ts > 0) ? "BUY setups" : ((ts < 0) ? "SELL setups" : "waiting")), (ts > 0) ? CLR_UP : ((ts < 0) ? CLR_DN : CLR_MUTED));
+      RefreshRates();
+      PRow(0, BandName(VolBand()) + " vol | " + MemSessionName(MemSession()) + " | spread " + DoubleToString((Ask - Bid) / Point, 0) + ((g_spreadAvg > 0) ? " (avg " + DoubleToString(g_spreadAvg / Point, 0) + ")" : ""), CLR_TXT);
+      string nm = "";
+      datetime ev = 0;
+      string tbw = "";
+      if(TimeBlock(tbw)) PRow(0, "News: " + tbw, CLR_DN);
+      else if(UseNewsFilter && NewsSoon(24 * 60, nm, ev)) PRow(0, "News: " + nm + " in " + Until(ev), CLR_GOLD);
+      else PRow(0, UseNewsFilter ? "News: nothing big in the next 24h" : "News filter OFF", CLR_MUTED);
+      //--- SIGNALS
+      PRow(1, "SIGNALS", CLR_AQUA);
+      if(g_swTxt != "") PRow(0, "Watching: " + g_swTxt, CLR_GOLD);
+      if(UsePullback && V10Here()) PRow(0, "Pullback  " + ((g_cls == SC_GOLD && GoldPullbackMode == GM_OFF) ? "OFF on gold" : PbStatus(PERIOD_H1)), CLR_TXT);
+      if(UseBreakout && V10Here()) PRow(0, "Breakout  " + BoStatus(), CLR_TXT);
+      if(UseTrendMethod && TrendSymbolOn()) PRow(0, "Trend  " + ((g_note[M_TR] != "") ? g_note[M_TR] : TxActiveList()), CLR_TXT);
+      if(MemoryMode != MEM_OFF) PRow(0, "Memory  " + MemModeShort() + ((MemTradesHere() && MemoryMode == MEM_SHADOW) ? " (" + IntegerToString(MemShadowOpen()) + " virtual open)" : ""), CLR_MUTED);
+      string why = WhyNoTrade();
+      if(why != "") PRow(0, "Why no trade: " + why, CLR_GOLD);
+      //--- OPEN TRADES
+      int cnt = CountMyOpen(-1);
+      PRow(1, "OPEN TRADES (" + IntegerToString(cnt) + ")", CLR_AQUA);
+      int shown = 0;
+      double flo = 0;
+      for(int i = OrdersTotal() - 1; i >= 0; i--)
+        {
+         if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
+         if(!MyOrder()) continue;
+         long key = OrderKey();
+         int dir = (OrderType() == OP_BUY) ? 1 : -1;
+         double R = PGet(key, "R", 0), en = OrderOpenPrice(), sl2 = OrderStopLoss();
+         double curR = (R > 0) ? dir * (((dir > 0) ? Bid : Ask) - en) / R : 0;
+         double tpl = OrderProfit() + OrderSwap() + OrderCommission();
+         flo += tpl;
+         bool lk = (sl2 > 0 && dir * (sl2 - en) >= 0);
+         if(shown < 4)
+            PRow(0, SideName(dir) + " " + MethodTag(KeyMethod(key)) + " " + DoubleToString(OrderLots(), 2) + "  " + ((curR >= 0) ? "+" : "") + DoubleToString(curR, 2) + "R  " + Money(tpl) + (lk ? ((PGet(key, "TRL", 0) > 0) ? "  trailing" : "  risk-free") : ""), (tpl >= 0) ? CLR_UP : CLR_DN);
+         shown++;
+        }
+      if(cnt == 0) PRow(0, "none - waiting for a setup", CLR_MUTED);
+      else if(cnt > shown || cnt > 4) PRow(0, "... " + IntegerToString(cnt - 4) + " more | floating " + Money(flo), CLR_MUTED);
+      //--- LAST TRADES
+      PRow(1, "LAST TRADES", CLR_AQUA);
+      bool any = false;
+      for(int j = 0; j < 3; j++) if(g_lx[j] != "") { PRow(0, g_lx[j], (g_lxR[j] > 0) ? CLR_UP : ((g_lxR[j] < 0) ? CLR_DN : CLR_MUTED)); any = true; }
+      if(!any) PRow(0, "none yet", CLR_MUTED);
+      //--- DETAILS
+      if(g_pnDet)
+        {
+         PRow(1, "DETAILS", CLR_AQUA);
+         PRow(0, "Market mode: " + MarketModeText(), CLR_TXT);
+         PRow(0, "Points " + PointsText(), CLR_TXT);
+         if(HistoryMode != HIST_OFF)
+           {
+            int hk = PanelHistKey(M_PB);
+            if(hk >= 0) PRow(0, "History PB: " + HistLine(hk), CLR_MUTED);
+            int hk2 = PanelHistKey(M_BO);
+            if(hk2 >= 0) PRow(0, "History BO: " + HistLine(hk2), CLR_MUTED);
+           }
+         if(g_m5Txt != "") PRow(0, "M5: " + g_m5Txt, CLR_MUTED);
+         string sc = "";
+         for(int mm = 0; mm < 4; mm++)
+           {
+            string sb = g_SP + "SB_" + _Symbol + "_" + MethodTag(mm);
+            double nn = GVGet(sb + "_N", 0);
+            if(nn > 0) sc += MethodTag(mm) + " " + DoubleToString(nn, 0) + " " + Money(GVGet(sb + "_PL", 0)) + "  ";
+           }
+         if(sc != "") PRow(0, "All time: " + sc, CLR_MUTED);
+         double lot = TradeLots(0);
+         PRow(0, "Lot " + (RiskLotsHere() ? "risk " + DoubleToString(RiskPctHere(), 2) + "%" : DoubleToString(lot, 2)) + " | ATR H1 " + Px(ATR(PERIOD_H1, 1)) + " | magic " + IntegerToString(MethodMagic(M_PB)), CLR_MUTED);
+         PRow(0, "Telegram: " + (g_tg ? (g_tgUrlErr ? "URL not allowed in MT4 options" : (g_tgMaster ? "on (sends reports, reads commands)" : "on")) : "off (token empty)"), CLR_MUTED);
+         PRow(0, "Status: " + g_status, CLR_MUTED);
+        }
+     }
+   PanelDraw(chip, chipC, mode);
+   DrawChartMaybe();
+  }
+
+//--- SPEED: the chart drawings are rebuilt when something changed (new candle, trades / stops / lots, a new signal or
+//--- result mark) and otherwise every 5 seconds - not every second (chart photos always draw fresh)
+string   g_dcSig = "";
+datetime g_dcLast = 0;
+void DrawChartMaybe()
+  {
+   string sig = IntegerToString((long)iTime(_Symbol, Period(), 0)) + "|" + IntegerToString(g_sgN) + "|" + IntegerToString(g_cbN) + "|" + IntegerToString(ChartGetInteger(0, CHART_SCALE, 0));
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+     {
+      if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
+      if(!MyOrder()) continue;
+      sig += "|" + IntegerToString(OrderTicket()) + ":" + DoubleToString(OrderStopLoss(), Digits) + ":" + DoubleToString(OrderLots(), 2);
+     }
+   if(sig == g_dcSig && TimeLocal() - g_dcLast < 5) return;
+   g_dcSig = sig;
+   g_dcLast = TimeLocal();
+   DrawLines();
+   DrawChart();
+  }
+
+void PanelDraw(string chip, color chipC, string mode)
+  {
+   int y = PNL_Y;
+   int hh = 22;
+   //--- header
+   PnRect(PNL + "HD", PNL_X, y, PNL_W, hh, CLR_HEAD, CLR_LINE);
+   PnText(PNL + "HT", PNL_X + 8, y + 4, "AK 10.4  " + _Symbol + "  " + mode, CLR_TXT, 9, "Segoe UI Semibold");
+   PnRect(PNL + "HC", PNL_X + PNL_W - 112, y + 4, 62, 14, chipC, chipC);
+   PnText(PNL + "HCT", PNL_X + PNL_W - 106, y + 4, chip, C'15,18,28', 7, "Segoe UI Semibold");
+   PnButton(PNL + "B_MIN", PNL_X + PNL_W - 44, y + 3, 18, 16, g_pnMin ? "+" : "-", CLR_HEAD, CLR_TXT);
+   PnButton(PNL + "B_DET", PNL_X + PNL_W - 23, y + 3, 18, 16, "i", g_pnDet ? CLR_AQUA : CLR_HEAD, g_pnDet ? C'15,18,28' : CLR_TXT);
+   y += hh;
+   //--- body rows
+   int bodyH = 6;
+   for(int i = 0; i < g_prN; i++) bodyH += (g_prK[i] == 1) ? PNL_LH + 6 : PNL_LH;
+   int btnH = g_pnMin ? 0 : 26;
+   if(!g_pnMin)
+     {
+      PnRect(PNL + "BG", PNL_X, y, PNL_W, bodyH + btnH, CLR_BG, CLR_LINE);
+      int yy = y + 4;
+      int li = 0;
+      for(int i = 0; i < g_prN; i++)
+        {
+         string nm = PNL + "L" + IntegerToString(li);
+         if(g_prK[i] == 1)
+           {
+            yy += 4;
+            PnText(nm, PNL_X + 8, yy, g_prT[i], g_prC[i], 7, "Segoe UI Semibold");
+            PnRect(PNL + "SL" + IntegerToString(li), PNL_X + 8 + StringLen(g_prT[i]) * 6 + 6, yy + 7, PNL_W - 22 - StringLen(g_prT[i]) * 6, 1, CLR_LINE, CLR_LINE);
+            yy += PNL_LH + 2;
+           }
+         else
+           {
+            PnText(nm, PNL_X + 10, yy, g_prT[i], g_prC[i], 8, "Consolas");
+            if(ObjectFind(0, PNL + "SL" + IntegerToString(li)) >= 0) ObjectDelete(0, PNL + "SL" + IntegerToString(li));
+            yy += PNL_LH;
+           }
+         li++;
+        }
+      for(int j = li; j < 120; j++)
+        {
+         string n1 = PNL + "L" + IntegerToString(j);
+         if(ObjectFind(0, n1) < 0) break;
+         ObjectDelete(0, n1);
+         if(ObjectFind(0, PNL + "SL" + IntegerToString(j)) >= 0) ObjectDelete(0, PNL + "SL" + IntegerToString(j));
+        }
+      //--- buttons
+      int by = y + bodyH + 3;
+      bool pz = SymbolPaused();
+      bool armed = (TimeLocal() - g_pnCloseArm <= 5);
+      PnButton(PNL + "B_PAUSE", PNL_X + 8, by, 92, 19, pz ? "RESUME " + _Symbol : "PAUSE " + _Symbol, pz ? CLR_GOLD : CLR_HEAD, pz ? C'15,18,28' : CLR_TXT);
+      PnButton(PNL + "B_CLOSE", PNL_X + 106, by, 110, 19, armed ? "CLICK AGAIN = CLOSE" : "CLOSE " + _Symbol, armed ? CLR_DN : CLR_HEAD, CLR_TXT);
+      PnButton(PNL + "B_TG", PNL_X + 222, by, 70, 19, g_tg ? "TG ON" : "TG OFF", CLR_HEAD, g_tg ? CLR_UP : CLR_MUTED);
+     }
+   else if(ObjectFind(0, PNL + "BG") >= 0)                             // minimised: remove the body once (not every second)
+     {
+      DeleteObjects(PNL + "BG");
+      DeleteObjects(PNL + "L");
+      DeleteObjects(PNL + "SL");
+      DeleteObjects(PNL + "B_PAUSE");
+      DeleteObjects(PNL + "B_CLOSE");
+      DeleteObjects(PNL + "B_TG");
+     }
+  }
+
+//--- a click on a panel button
+void PanelClick(string obj)
+  {
+   if(StringFind(obj, PNL + "B_") != 0) return;
+   ObjectSetInteger(0, obj, OBJPROP_STATE, 0);
+   if(obj == PNL + "B_MIN") { g_pnMin = !g_pnMin; GVSet(PnGV("MIN"), g_pnMin ? 1 : 0); PanelHide(); }
+   else if(obj == PNL + "B_DET") { g_pnDet = !g_pnDet; GVSet(PnGV("DET"), g_pnDet ? 1 : 0); PanelHide(); }
+   else if(obj == PNL + "B_PAUSE") { GVSet(PauseGV(_Symbol), SymbolPaused() ? 0 : 1); if(GVGet(PauseGV("ALL"), 0) > 0) GVSet(PauseGV("ALL"), 0); }
+   else if(obj == PNL + "B_CLOSE")
+     {
+      if(TimeLocal() - g_pnCloseArm <= 5)
+        {
+         g_pnCloseArm = 0;
+         for(int i = OrdersTotal() - 1; i >= 0; i--)
+           {
+            if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
+            if(!MyOrder()) continue;
+            int dir = (OrderType() == OP_BUY) ? 1 : -1;
+            CloseTrade(OrderTicket(), dir, OrderKey(), CR_MANUAL);
+           }
+        }
+      else g_pnCloseArm = TimeLocal();
+     }
+   g_lastPanel = 0;
+   UpdatePanel();
+   ChartRedraw(0);
+  }
+
+//--- history key for the panel: the last signal of the method, or (none yet) its main setup in the situation now
+int PanelHistKey(int m)
+  {
+   if(g_noteKey[m] >= 0) return g_noteKey[m];
+   int ts = TrendSide();
+   if(ts == 0) return -1;
+   if(m == M_TR)
+     {
+      bool nt = true;
+      for(int c = 1; c <= TX_N; c++) if(TxActive(c, nt)) return HistKeyNow(8 + c, ts);
+      return -1;
+     }
+   return HistKeyNow((m == M_PB) ? 0 : 6, ts);
+  }
+
+//--- first start of this version (the list is empty): the last 3 closed trades of this chart from the account history
+void PanelLastFromHistory()
+  {
+   if(IsTesting() || g_lx[0] != "") return;
+   int tk[3];
+   datetime tc[3];
+   ArrayInitialize(tk, -1);
+   ArrayInitialize(tc, 0);
+   for(int i = OrdersHistoryTotal() - 1; i >= 0; i--)
+     {
+      if(!OrderSelect(i, SELECT_BY_POS, MODE_HISTORY)) continue;
+      if(OrderSymbol() != _Symbol || OrderType() > OP_SELL || !IsMyMagic(OrderMagicNumber())) continue;
+      datetime c = OrderCloseTime();
+      for(int j = 0; j < 3; j++)
+        {
+         if(c <= tc[j]) continue;
+         for(int q = 2; q > j; q--) { tk[q] = tk[q - 1]; tc[q] = tc[q - 1]; }
+         tk[j] = OrderTicket();
+         tc[j] = c;
+         break;
+        }
+     }
+   for(int k = 0; k < 3; k++)
+     {
+      if(tk[k] < 0 || !OrderSelect(tk[k], SELECT_BY_TICKET)) continue;
+      double p = OrderProfit() + OrderSwap() + OrderCommission();
+      g_lx[k] = IstClock(OrderCloseTime()) + "  " + ((OrderType() == OP_BUY) ? "BUY" : "SELL") + " " + MethodTag(MethodOfMagic(OrderMagicNumber())) + "  " + Money(p) + " USD";
+      g_lxR[k] = (p > 0.005) ? 1 : ((p < -0.005) ? -1 : 0);
+     }
+  }
+
+//--- a closed trade goes into the panel's "last trades" list
+void PanelAddExit(int dir, int m, double resR, double profit, datetime ct)
+  {
+   for(int i = 2; i >= 1; i--) { g_lx[i] = g_lx[i - 1]; g_lxR[i] = g_lxR[i - 1]; }
+   g_lx[0] = IstClock(ct) + "  " + SideName(dir) + " " + MethodTag(m) + "  " + ((resR >= 0) ? "+" : "") + DoubleToString(resR, 2) + "R  " + Money(profit);
+   g_lxR[0] = (resR > 0.05) ? 1 : ((resR < -0.05) ? -1 : 0);
+   SaveLast();
+  }
+
+//--- entry / stop lines of the open trades (dotted, behind the candles)
+void HLine(string nm, double price, color c, int style, string txt)
+  {
+   if(price <= 0) { if(ObjectFind(0, nm) >= 0) ObjectDelete(0, nm); return; }
+   if(ObjectFind(0, nm) < 0)
+     {
+      ObjectCreate(0, nm, OBJ_HLINE, 0, 0, price);
+      ObjectSetInteger(0, nm, OBJPROP_SELECTABLE, 0);
+      ObjectSetInteger(0, nm, OBJPROP_HIDDEN, 1);
+      ObjectSetInteger(0, nm, OBJPROP_BACK, 1);
+     }
+   ObjectSetDouble(0, nm, OBJPROP_PRICE, price);
+   ObjectSetInteger(0, nm, OBJPROP_COLOR, c);
+   ObjectSetInteger(0, nm, OBJPROP_STYLE, style);
+   ObjectSetString(0, nm, OBJPROP_TEXT, txt);
+  }
+
+bool g_tlGone = false;
+void DrawLines()
+  {
+   if(!DrawTradeLines)
+     {
+      if(!g_tlGone) { DeleteObjects(AK_OBJ + "TL"); g_tlGone = true; }   // nothing to draw: clean once, not every refresh
+      return;
+     }
+   g_tlGone = false;
+   DeleteObjects(AK_OBJ + "TL");
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+     {
+      if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
+      if(!MyOrder()) continue;
+      long key = OrderKey();
+      string id = AK_OBJ + "TL" + IntegerToString(key);
+      HLine(id + "E", OrderOpenPrice(), C'110,120,140', STYLE_DOT, "entry");
+      HLine(id + "S", OrderStopLoss(), C'200,80,80', STYLE_DOT, "stop");
+     }
+  }
+//==================================================================
+// ACCESS (demo / real)
+//==================================================================
+void CheckAccess()
+  {
+   g_canTrade = true;
+   g_block = "";
+   if(IsTesting()) return;
+   if(!IsDemo() && (AccountMode != AK_DEMO_AND_LIVE || !LiveConfirm))
+     {
+      g_canTrade = false;
+      g_block = "REAL account - set Account mode = Demo and real AND LiveConfirm = true to trade real money";
+     }
+  }
+
+//==================================================================
+// EVENTS
+//==================================================================
+string HistModeName() { return (HistoryMode == HIST_OFF) ? "OFF" : ((HistoryMode == HIST_FOLLOW) ? "FOLLOW" : "SHOW"); }
+string PtsModeName() { return (PointsExitMode == PTS_OFF) ? "OFF" : ((PointsExitMode == PTS_EXIT) ? "EXIT" : "TIGHTEN"); }
+
+bool InputsOK(string &why)
+  {
+   why = "";
+   if(MagicBase <= 0 || MagicBase > 2000000000) why = "MagicBase must be between 1 and 2000000000";
+   else if(LotMode == AK_LOT_FIXED && (LotGold <= 0 || LotBTC <= 0 || LotETH <= 0 || LotEUR <= 0 || MemoryLot <= 0)) why = "every lot input must be > 0";
+   else if(LotMode == AK_LOT_RISK && (RiskPercent <= 0 || MemoryRiskPct <= 0)) why = "RiskPercent and MemoryRiskPct must be > 0";
+   else if(UsePartial && (PartialPct <= 0 || PartialPct >= 100 || PartialAtR <= 0)) why = "PartialPct must be between 1 and 99 and PartialAtR > 0";
+   else if(NoLossAtR < 0 || TrailStartR < 0 || (TrailStartR > 0 && TrailBehindR <= 0)) why = "NoLossAtR / TrailStartR must be >= 0 and TrailBehindR > 0";
+   else if(PointsFlipMargin < 1 || PointsFlipMargin > 10) why = "PointsFlipMargin must be 1-10";
+   else if(MinHoldHours < 0 || MaxHoldDays < 0) why = "MinHoldHours and MaxHoldDays must be >= 0";
+   else if(MaxTradesPerSymbol < 1 || MaxOpenPullback < 0 || MaxOpenBreakout < 0 || MemoryMaxOpen < 0) why = "MaxTradesPerSymbol must be >= 1 and the method limits >= 0";
+   else if(CalmVolRank < 0 || WildVolRank > 1 || CalmVolRank >= WildVolRank) why = "0 <= CalmVolRank < WildVolRank <= 1";
+   else if(QuickTargetR <= 0 || QuickNoLossR < 0 || QuickMaxHours < 0) why = "QuickTargetR must be > 0, QuickNoLossR and QuickMaxHours >= 0";
+   else if(MemoryMinBalance < 0 || MemoryPauseAfter < 0) why = "MemoryMinBalance and MemoryPauseAfter must be >= 0";
+   else if(HistoryMinTrades < 1 || HistoryShowLast < 0 || HistoryShowLast > 5) why = "HistoryMinTrades must be >= 1 and HistoryShowLast 0-5";
+   else if(MaxOpenTrend < 0 || TrendRiskPct < 0 || (LotMode == AK_LOT_FIXED && (TrendLotH4Gold <= 0 || TrendLotH4BTC <= 0 || TrendLotH4ETH <= 0 || TrendLotH4EUR <= 0))) why = "MaxOpenTrend / TrendRiskPct must be >= 0 and the Trend lots > 0";
+   else if(SetupAlertsPerDay < 0 || PromoIntervalMin < 10 || PatternLifeBars < 1) why = "SetupAlertsPerDay >= 0, PromoIntervalMin >= 10 and PatternLifeBars >= 1";
+   return (why == "");
+  }
+
+int OnInit()
+  {
+   g_cls = ClassifySymbol(_Symbol);
+   g_h = SymbolCode();
+   //--- the Strategy Tester uses its own "AK10Q" names, so a test never touches the live/demo chart memory
+   g_G  = (IsTesting() ? "AK10Q_" : "AK10_") + IntegerToString(MagicBase + g_h) + "_";
+   g_SP = IsTesting() ? "AK10QS_" : "AK10S_";
+   if(IsTesting()) GlobalVariablesDeleteAll("AK10Q");                 // every Strategy Tester run starts clean
+   string bad = "";
+   if(!InputsOK(bad)) { Print("[AK10] invalid inputs: ", bad); return INIT_PARAMETERS_INCORRECT; }
+   CheckAccess();
+   if(!IsTesting() && GlobalVariableCheck("AK10_GMTOFF")) { g_gmtOff = (int)GlobalVariableGet("AK10_GMTOFF"); g_gmtOk = true; }
+   LearnGmtOffset();
+   EIABuild();
+   NewsBuild();
+   g_feedT = 0;
+   g_tg = UseTelegram && !IsTesting() && StringLen(TelegramBotToken) > 20;
+   if(UseTelegram && !IsTesting() && !g_tg) Print("[TG] Telegram is off: the bot token input is empty.");
+   for(int mi = 0; mi < 4; mi++) { g_note[mi] = ""; g_noteT[mi] = 0; g_noteKey[mi] = -1; }
+   for(int li = 0; li < 3; li++) { g_lx[li] = ""; g_lxR[li] = 0; g_ptName[li] = ""; g_ptExp[li] = 0; }
+   LoadLast();
+   PanelLastFromHistory();
+   PanelLoadState();
+   DeleteObjects(AK_OBJ + "PT");                                        // pattern labels, signal marks and closed-trade boxes of an earlier run
+   DeleteObjects(AK_OBJ + "SG");
+   DeleteObjects(AK_OBJ + "CB");
+   ResumeAfterRestart();
+   for(int si = 0; si < MSHN; si++) g_shOn[si] = false;                // shadow trades start empty (they are not kept over a restart)
+   g_m5Bar = 0;
+   g_lastH1 = iTime(_Symbol, PERIOD_H1, 0);                            // no late entry on a candle that closed before the start
+   g_lastM15 = iTime(_Symbol, PERIOD_M15, 0);
+   g_lastM5 = iTime(_Symbol, PERIOD_M5, 0);
+   g_lastH4 = iTime(_Symbol, PERIOD_H4, 0);
+   g_lastM1 = iTime(_Symbol, PERIOD_M1, 0);
+   g_ptsBar = 0;
+   PointsUpdate();
+   UpdateEquityPeak();
+   if(!IsTesting())
+     {
+      if(!EventSetTimer(1)) Print("[AK10] timer could not start - Telegram, the panel refresh and the live calendar will not work");
+      ChartSetInteger(0, CHART_SHIFT, 1);                               // room on the right for the labels
+      if(ChartGetDouble(0, CHART_SHIFT_SIZE, 0) < 20) ChartSetDouble(0, CHART_SHIFT_SIZE, 20);
+     }
+   if(!SymbolSupported()) Print("[AK10] ", _Symbol, ": no new trades - ", SymbolOffText(), ". Open trades are still managed.");
+   double lot = TradeLots(0);
+   Print("[AK10] ", AK_NAME, " ", AK_VER, " on ", _Symbol, " (", ClassName(g_cls), ") magic Pullback ", MethodMagic(M_PB), " / Breakout ", MethodMagic(M_BO), " / Memory ", MethodMagic(M_MEM), " / Trend ", MethodMagic(M_TR),
+         " | trading ", (g_canTrade ? "ON" : "BLOCKED: " + g_block), " | lot ", (RiskLotsHere() ? "risk " + DoubleToString(RiskPctHere(), 2) + "%" : DoubleToString(lot, 2)), " | GMT offset ", GmtOffsetSec() / 3600);
+   Print("[AK10] methods: Pullback ", (UsePullback ? "ON" : "OFF"), " | Breakout ", (UseBreakout ? "ON" : "OFF"), " | Trend ", (UseTrendMethod ? "ON" : "OFF"), " (", TxActiveList(), ") | Memory ", MemModeShort(),
+         " | per symbol ", MaxTradesPerSymbol, " | account ", MaxOpenAccount);
+   Print("[AK10] memory: ", (MemTradesHere() ? IntegerToString(MemCellsHere()) + " learnt setups for this symbol, mode " + MemModeText() : "analysis only here"),
+         " | history table: ", HIST_N, " rows (class ", HistSymClass(), ") | mode ", HistModeName(), " | news filter ", (UseNewsFilter ? "ON" : "off"), " | open trades taken over: ", g_pkN);
+   return INIT_SUCCEEDED;
+  }
+
+void OnDeinit(const int reason)
+  {
+   if(!IsTesting()) EventKillTimer();
+   DeleteObjects(AK_OBJ);
+   Comment("");
+  }
+
+void OnTick()
+  {
+   RefreshRates();
+   LearnGmtOffset();
+   double spr = Ask - Bid;
+   if(spr > 0) g_spreadAvg = (g_spreadAvg <= 0) ? spr : g_spreadAvg * 0.995 + spr * 0.005;
+   UpdateEquityPeak();
+   datetime b1 = iTime(_Symbol, PERIOD_M1, 0);
+   bool newM1 = (b1 != g_lastM1 && b1 > 0);
+   if(newM1) g_lastM1 = b1;
+   PointsUpdate();
+   ManagePositions();
+   if(!SymbolPaused()) ScanSetups();
+   if(MemoryMode != MEM_OFF && MemTradesHere()) MemShadowTick();
+   if(newM1)
+     {
+      MemM5Analysis();
+      SetupWatchTick();
+      if(IsTesting() && TesterTelegramLog) { TelegramTick(); InstaState(); }   // tester: no timer - the Telegram preview runs once per minute
+     }
+   if(TimeLocal() - g_lastPanel >= 1) UpdatePanel();
+  }
+
+int g_tmr = 0;
+void OnTimer()
+  {
+   if(TimeLocal() - g_lastPanel >= 1) UpdatePanel();                   // at most once a second (OnTick may have just done it)
+   g_tmr++;
+   if(g_tmr % 3 != 0) return;
+   NewsFeedTick();
+   TelegramTick();
+   InstaState();
+  }
+
+void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
+  {
+   if(id == CHARTEVENT_OBJECT_CLICK) PanelClick(sparam);
+  }
+//+------------------------------------------------------------------+
